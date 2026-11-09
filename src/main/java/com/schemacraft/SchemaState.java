@@ -4,6 +4,8 @@ import com.schemacraft.render.GhostRenderer;
 import com.schemacraft.schematic.Schematic;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 
 /** État global du mod (côté client uniquement). */
 public final class SchemaState {
@@ -32,15 +34,69 @@ public final class SchemaState {
 	}
 
 	public static void setLoaded(Schematic schematic) {
+		base = schematic;
 		loaded = schematic;
+		rotation = Rotation.NONE;
+		mirror = Mirror.NONE;
 		origin = null;
 		GhostRenderer.markDirty();
 	}
 
 	public static void unload() {
+		base = null;
 		loaded = null;
+		rotation = Rotation.NONE;
+		mirror = Mirror.NONE;
 		origin = null;
 		GhostRenderer.markDirty();
+	}
+
+	// --- Rotation / miroir (comme Litematica) ---
+	/** Schéma tel que sauvegardé ; "loaded" en est la version pivotée / miroir. */
+	public static Schematic base;
+	public static Rotation rotation = Rotation.NONE;
+	public static Mirror mirror = Mirror.NONE;
+
+	/** Pivote de 90° (sens horaire vu du dessus si clockwise). */
+	public static void rotate(boolean clockwise) {
+		rotation = rotation.getRotated(clockwise ? Rotation.CLOCKWISE_90 : Rotation.COUNTERCLOCKWISE_90);
+		applyTransform();
+	}
+
+	/** Active / désactive un miroir (un seul à la fois, comme Litematica). */
+	public static void toggleMirror(Mirror m) {
+		mirror = mirror == m ? Mirror.NONE : m;
+		applyTransform();
+	}
+
+	public static void resetTransform() {
+		rotation = Rotation.NONE;
+		mirror = Mirror.NONE;
+		applyTransform();
+	}
+
+	private static void applyTransform() {
+		if (base == null) return;
+		loaded = base.transformed(rotation, mirror);
+		clampLayer();
+		GhostRenderer.markDirty();
+	}
+
+	public static String rotationText() {
+		return switch (rotation) {
+			case NONE -> "0°";
+			case CLOCKWISE_90 -> "90°";
+			case CLOCKWISE_180 -> "180°";
+			case COUNTERCLOCKWISE_90 -> "270°";
+		};
+	}
+
+	public static String mirrorText() {
+		return switch (mirror) {
+			case NONE -> "aucun";
+			case LEFT_RIGHT -> "Z";
+			case FRONT_BACK -> "X";
+		};
 	}
 
 	public static void setOrigin(BlockPos pos) {

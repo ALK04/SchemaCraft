@@ -12,6 +12,8 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -89,6 +91,45 @@ public final class Schematic {
 			return Blocks.AIR.defaultBlockState();
 		}
 		return palette.get(blocks[(y * sizeZ + z) * sizeX + x]);
+	}
+
+	/**
+	 * Copie miroir + pivotée du schéma (même logique que Litematica : miroir puis rotation,
+	 * et BlockState#mirror / #rotate pour orienter escaliers, bûches, portes...).
+	 * La boîte résultante repart de (0,0,0) : le coin du placement ne bouge pas.
+	 */
+	public Schematic transformed(Rotation rotation, Mirror mirror) {
+		if (rotation == Rotation.NONE && mirror == Mirror.NONE) return this;
+
+		boolean swap = rotation == Rotation.CLOCKWISE_90 || rotation == Rotation.COUNTERCLOCKWISE_90;
+		int nsx = swap ? sizeZ : sizeX;
+		int nsz = swap ? sizeX : sizeZ;
+
+		List<BlockState> newPalette = new ArrayList<>(palette.size());
+		for (BlockState state : palette) {
+			newPalette.add(state.mirror(mirror).rotate(rotation));
+		}
+
+		int[] newBlocks = new int[blocks.length];
+		for (int y = 0; y < sizeY; y++) {
+			for (int z = 0; z < sizeZ; z++) {
+				for (int x = 0; x < sizeX; x++) {
+					// 1) miroir
+					int mx = mirror == Mirror.FRONT_BACK ? sizeX - 1 - x : x;
+					int mz = mirror == Mirror.LEFT_RIGHT ? sizeZ - 1 - z : z;
+					// 2) rotation autour de l'axe Y, ramenée dans la boîte [0, taille[
+					int nx, nz;
+					switch (rotation) {
+						case CLOCKWISE_90 -> { nx = sizeZ - 1 - mz; nz = mx; }
+						case CLOCKWISE_180 -> { nx = sizeX - 1 - mx; nz = sizeZ - 1 - mz; }
+						case COUNTERCLOCKWISE_90 -> { nx = mz; nz = sizeX - 1 - mx; }
+						default -> { nx = mx; nz = mz; }
+					}
+					newBlocks[(y * nsz + nz) * nsx + nx] = blocks[(y * sizeZ + z) * sizeX + x];
+				}
+			}
+		}
+		return new Schematic(name, nsx, sizeY, nsz, newPalette, newBlocks);
 	}
 
 	public CompoundTag toNbt() {

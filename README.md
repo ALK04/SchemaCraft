@@ -20,7 +20,7 @@ Touches modifiables dans Options → Commandes → SchemaCraft.
 
 - **Sélection** : coordonnées des 2 coins, taille, sauvegarde sous un nom.
 - **Schémas** : liste des schémas (`<instance>/schemas/*.schema`), clic = charger.
-- **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), mode d'affichage, couches, retirer.
+- **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), rotation ±90°, miroir X/Z (comme Litematica), mode d'affichage, couches, retirer.
 - **Ressources** : objets nécessaires (total, à poser, dans l'inventaire), filtre « à chercher ».
 - **Paramètres** : printer (on/off, délai, blocs par pose, portée, couche affichée seulement).
   Sauvegardés dans `config/schemacraft.properties`.
