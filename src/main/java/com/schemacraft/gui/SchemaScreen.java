@@ -259,7 +259,29 @@ public class SchemaScreen extends Screen {
 		y += ROW + 2;
 		label(() -> "Shift = 10 blocs. Épée en bois = poser.", x, y, DARK, false);
 
+		// --- Rotation / miroir ---
 		y += 14;
+		String[] tNames = {"-90°", "+90°", "Miroir X", "Miroir Z", "Réinit."};
+		Runnable[] tActions = {
+			() -> SchemaState.rotate(false),
+			() -> SchemaState.rotate(true),
+			() -> SchemaState.toggleMirror(net.minecraft.world.level.block.Mirror.FRONT_BACK),
+			() -> SchemaState.toggleMirror(net.minecraft.world.level.block.Mirror.LEFT_RIGHT),
+			SchemaState::resetTransform,
+		};
+		int tw = (W - 4 * 2) / 5;
+		for (int i = 0; i < tNames.length; i++) {
+			Runnable action = tActions[i];
+			Button tb = addRenderableWidget(Button.builder(Component.literal(tNames[i]), b -> {
+				action.run();
+				rebuildWidgets();
+			}).bounds(x + i * (tw + 2), y, tw, 20).build());
+			tb.active = loaded;
+		}
+		y += ROW + 1;
+		label(() -> "Rotation : " + SchemaState.rotationText() + "   Miroir : " + SchemaState.mirrorText(), x, y, 0xFFFFD000, false);
+
+		y += 12;
 		addRenderableWidget(Button.builder(Component.literal(SchemaState.layerMode ? "Affichage : couche par couche" : "Affichage : tout le schéma"), b -> {
 			SchemaState.toggleLayerMode();
 			rebuildWidgets();
