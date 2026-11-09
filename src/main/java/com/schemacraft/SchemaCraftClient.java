@@ -40,6 +40,7 @@ public final class SchemaCraftClient implements ClientModInitializer {
 	private static KeyMapping toggleLayerKey;
 	private static KeyMapping layerUpKey;
 	private static KeyMapping layerDownKey;
+	private static KeyMapping resourcesKey;
 
 	@Override
 	public void onInitializeClient() {
@@ -53,6 +54,9 @@ public final class SchemaCraftClient implements ClientModInitializer {
 			"key.schemacraft.layer_up", InputConstants.Type.KEYBOARD, InputConstants.KEY_PAGEUP, category));
 		layerDownKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
 			"key.schemacraft.layer_down", InputConstants.Type.KEYBOARD, InputConstants.KEY_PAGEDOWN, category));
+		// Touche ")" sur un clavier AZERTY (même position physique que "-" en QWERTY).
+		resourcesKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+			"key.schemacraft.resources", InputConstants.Type.KEYBOARD, InputConstants.KEY_MINUS, category));
 
 		ClientTickEvents.END_CLIENT_TICK.register(SchemaCraftClient::onTick);
 		UseBlockCallback.EVENT.register(SchemaCraftClient::onUseBlock);
@@ -70,6 +74,9 @@ public final class SchemaCraftClient implements ClientModInitializer {
 
 		while (openMenuKey.consumeClick()) {
 			mc.setScreenAndShow(new SchemaScreen());
+		}
+		while (resourcesKey.consumeClick()) {
+			mc.setScreenAndShow(SchemaScreen.openResources());
 		}
 		while (toggleLayerKey.consumeClick()) {
 			SchemaState.toggleLayerMode();

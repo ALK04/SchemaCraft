@@ -3,5 +3,6 @@
   "key.schemacraft.menu": "Ouvrir le menu SchemaCraft",
   "key.schemacraft.layer_mode": "Basculer tout / couche par couche",
   "key.schemacraft.layer_up": "Couche suivante (monter)",
-  "key.schemacraft.layer_down": "Couche précédente (descendre)"
+  "key.schemacraft.layer_down": "Couche précédente (descendre)",
+  "key.schemacraft.resources": "Ressources à avoir"
 }
