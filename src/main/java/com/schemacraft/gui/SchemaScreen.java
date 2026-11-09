@@ -59,6 +59,8 @@ public class SchemaScreen extends Screen {
 
 	private final List<Label> labels = new ArrayList<>();
 	private List<String> files = List.of();
+	/** Entrée (nom ou chemin .litematic) du schéma chargé, pour le surligner dans la liste. */
+	private static String loadedEntry;
 	private String status = "";
 	private int statusColor = WHITE;
 	private String pendingOverwrite;
@@ -189,16 +191,17 @@ public class SchemaScreen extends Screen {
 		int pages = Math.max(1, (files.size() + FILES_PER_PAGE - 1) / FILES_PER_PAGE);
 		if (page >= pages) page = pages - 1;
 
-		label(() -> "Schémas sauvegardés (" + files.size() + ") : clic pour charger", x, c, GRAY, false);
+		label(() -> "Schémas (" + files.size() + ") : clic pour charger", x, c, GRAY, false);
 		int y = c + 12;
 		if (files.isEmpty()) {
-			label(() -> "Aucun schéma. Sauvegarde-en un dans l'onglet Sélection.", x, y + 6, WHITE, false);
+			label(() -> "Aucun schéma (dossiers schemas/ et schematics/).", x, y + 6, WHITE, false);
 		}
 		int start = page * FILES_PER_PAGE;
 		for (int i = 0; i < FILES_PER_PAGE && start + i < files.size(); i++) {
 			String name = files.get(start + i);
-			boolean current = SchemaState.loaded != null && SchemaState.loaded.name().equals(name);
-			addRenderableWidget(Button.builder(Component.literal(current ? "» " + name + " «" : name), b -> load(name))
+			String shown = SchemaFiles.displayName(name) + (SchemaFiles.isLitematic(name) ? " [litematic]" : "");
+			boolean current = SchemaState.loaded != null && name.equals(loadedEntry);
+			addRenderableWidget(Button.builder(Component.literal(current ? "» " + shown + " «" : shown), b -> load(name))
 				.bounds(x, y + i * ROW, W, 20).build());
 		}
 
@@ -550,7 +553,8 @@ public class SchemaScreen extends Screen {
 		try {
 			Schematic schem = SchemaFiles.load(name);
 			SchemaState.setLoaded(schem);
-			setStatus("Chargé : " + name + ". Clic droit au sol avec l'épée en bois pour le poser.", 0xFF55FFFF);
+			loadedEntry = name;
+			setStatus("Chargé : " + schem.name() + " (" + schem.sizeX() + "x" + schem.sizeY() + "x" + schem.sizeZ() + "). Clic droit au sol avec l'épée en bois pour le poser.", 0xFF55FFFF);
 			rebuildWidgets();
 		} catch (IOException | RuntimeException e) {
 			setStatus("Impossible de charger " + name + " : " + e.getMessage(), 0xFFFF5555);

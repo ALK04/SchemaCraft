@@ -47,6 +47,12 @@ public final class Schematic {
 		this.nonAirCount = count;
 	}
 
+	/** Construit un schéma à partir de données déjà lues (import .litematic...). */
+	public static Schematic of(String name, int sizeX, int sizeY, int sizeZ, List<BlockState> palette, int[] blocks) {
+		if (blocks.length != sizeX * sizeY * sizeZ) throw new IllegalArgumentException("Nombre de blocs incohérent");
+		return new Schematic(name, sizeX, sizeY, sizeZ, palette, blocks);
+	}
+
 	/** Copie les blocs du monde (côté client) compris entre deux coins, inclus. */
 	public static Schematic capture(Level level, BlockPos a, BlockPos b, String name) {
 		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
