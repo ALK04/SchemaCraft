@@ -12,6 +12,7 @@ Mini-Litematica côté client : sélection, schémas, hologramme, affichage couc
 | Poser le schéma chargé (son coin min sur la face cliquée) | Épée en bois : clic droit |
 | Tout afficher / couche par couche | `=` |
 | Monter / descendre d'une couche | `PgUp` / `PgDn` |
+| Ressources à avoir | `)` (AZERTY) |
 
 Touches modifiables dans Options → Commandes → SchemaCraft.
 
@@ -20,6 +21,7 @@ Touches modifiables dans Options → Commandes → SchemaCraft.
 - **Sélection** : coordonnées des 2 coins, taille, sauvegarde sous un nom.
 - **Schémas** : liste des schémas (`<instance>/schemas/*.schema`), clic = charger.
 - **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), mode d'affichage, couches, retirer.
+- **Ressources** : objets nécessaires (total, à poser, dans l'inventaire), filtre « à chercher ».
 - **Paramètres** : printer (on/off, délai, blocs par pose, portée, couche affichée seulement).
   Sauvegardés dans `config/schemacraft.properties`.
 

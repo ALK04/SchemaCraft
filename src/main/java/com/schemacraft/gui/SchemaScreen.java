@@ -9,6 +9,7 @@ import java.util.function.Supplier;
 import com.schemacraft.SchemaCraftClient;
 import com.schemacraft.SchemaState;
 import com.schemacraft.Settings;
+import com.schemacraft.schematic.Materials;
 import com.schemacraft.schematic.SchemaFiles;
 import com.schemacraft.schematic.Schematic;
 
@@ -19,6 +20,7 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Menu principal (touche ","), organisé en onglets :
@@ -26,7 +28,7 @@ import net.minecraft.network.chat.Component;
  */
 public class SchemaScreen extends Screen {
 	private enum Tab {
-		SELECTION("Sélection"), SCHEMAS("Schémas"), PLACEMENT("Placement"), SETTINGS("Paramètres");
+		SELECTION("Sélection"), SCHEMAS("Schémas"), PLACEMENT("Placement"), RESOURCES("Ressources"), SETTINGS("Paramètres");
 
 		final String label;
 
@@ -35,9 +37,11 @@ public class SchemaScreen extends Screen {
 		}
 	}
 
-	private static final int W = 260;
+	private static final int W = 300;
 	private static final int ROW = 21;
 	private static final int FILES_PER_PAGE = 6;
+	private static final int RES_PER_PAGE = 7;
+	private static final int RES_ROW = 17;
 	private static final long MAX_BLOCKS = 4_000_000L;
 
 	private static final int GRAY = 0xFFAAAAAA;
@@ -46,6 +50,8 @@ public class SchemaScreen extends Screen {
 
 	private static Tab tab = Tab.SELECTION;
 	private static int page;
+	private static int resPage;
+	private static boolean resOnlyMissing;
 	private static String lastName = "";
 
 	/** Texte affiché à une position donnée, recalculé à chaque image. */
@@ -61,8 +67,20 @@ public class SchemaScreen extends Screen {
 	private EditBox nameBox;
 	private EditBox[] originBoxes;
 
+	/** Lignes de ressources visibles (onglet Ressources) et position de la liste. */
+	private List<Materials.Entry> resources = List.of();
+	private List<Materials.Entry> resourcesShown = List.of();
+	private int resListX;
+	private int resListY;
+
 	public SchemaScreen() {
 		super(Component.literal("SchemaCraft"));
+	}
+
+	/** Ouvre directement le menu sur l'onglet Ressources (touche rapide). */
+	public static SchemaScreen openResources() {
+		tab = Tab.RESOURCES;
+		return new SchemaScreen();
 	}
 
 	@Override
@@ -103,6 +121,7 @@ public class SchemaScreen extends Screen {
 			case SELECTION -> initSelection(x, c);
 			case SCHEMAS -> initSchemas(x, c);
 			case PLACEMENT -> initPlacement(x, c);
+			case RESOURCES -> initResources(x, c);
 			case SETTINGS -> initSettings(x, c);
 		}
 	}
@@ -262,6 +281,102 @@ public class SchemaScreen extends Screen {
 			rebuildWidgets();
 		}).bounds(x, y, W, 20).build());
 		remove.active = loaded;
+	}
+
+	// ================================================================ Ressources
+
+	private void initResources(int x, int c) {
+		resListX = x;
+		resListY = -1;
+		Schematic s = SchemaState.loaded;
+		if (s == null) {
+			resources = List.of();
+			resourcesShown = List.of();
+			label(() -> "Aucun schéma chargé (onglet Schémas)", x, c, GRAY, false);
+			return;
+		}
+
+		resources = Materials.compute(s, SchemaState.origin, minecraft.level, minecraft.player);
+		List<Materials.Entry> shown = new ArrayList<>();
+		int total = 0, missing = 0, toFetch = 0;
+		for (Materials.Entry e : resources) {
+			total += e.total();
+			missing += e.missing();
+			toFetch += e.toFetch();
+			if (!resOnlyMissing || e.toFetch() > 0) shown.add(e);
+		}
+		resourcesShown = shown;
+		int pages = Math.max(1, (shown.size() + RES_PER_PAGE - 1) / RES_PER_PAGE);
+		if (resPage >= pages) resPage = pages - 1;
+
+		final int fTotal = total, fMissing = missing, fFetch = toFetch;
+		label(() -> s.name() + " : " + fTotal + " objets, " + fMissing + " à poser, " + fFetch + " à chercher",
+			x, c, 0xFF55FFFF, false);
+
+		int y = c + 12;
+		addRenderableWidget(Button.builder(Component.literal(resOnlyMissing ? "Afficher : à chercher" : "Afficher : tout"), b -> {
+			resOnlyMissing = !resOnlyMissing;
+			resPage = 0;
+			rebuildWidgets();
+		}).bounds(x, y, 190, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Rafraîchir"), b -> rebuildWidgets())
+			.bounds(x + 194, y, W - 194, 20).build());
+
+		y += ROW + 3;
+		label(() -> "Objet", x + 20, y, GRAY, false);
+		label(() -> "Total", x + 190, y, GRAY, true);
+		label(() -> "À poser", x + 232, y, GRAY, true);
+		label(() -> "Inv.", x + 276, y, GRAY, true);
+		resListY = y + 11;
+		if (shown.isEmpty()) {
+			label(() -> resOnlyMissing ? "Tu as tout ce qu'il faut !" : "Schéma vide.", x, resListY + 4, 0xFF55FF55, false);
+		}
+
+		y = resListY + RES_PER_PAGE * RES_ROW + 2;
+		Button prev = addRenderableWidget(Button.builder(Component.literal("<"), b -> {
+			resPage--;
+			rebuildWidgets();
+		}).bounds(x, y, 24, 20).build());
+		prev.active = resPage > 0;
+		final int shownPages = pages;
+		label(() -> (resPage + 1) + " / " + shownPages, x + 49, y + 6, WHITE, true);
+		Button next = addRenderableWidget(Button.builder(Component.literal(">"), b -> {
+			resPage++;
+			rebuildWidgets();
+		}).bounds(x + 74, y, 24, 20).build());
+		next.active = resPage < pages - 1;
+		label(() -> SchemaState.isPlaced() ? "À poser = pas encore construit" : "Non posé : à poser = total",
+			x + 104, y + 6, DARK, false);
+	}
+
+	private void renderResources(GuiGraphicsExtractor g) {
+		if (resListY < 0 || resourcesShown.isEmpty()) return;
+		int x = resListX;
+		int start = resPage * RES_PER_PAGE;
+		for (int i = 0; i < RES_PER_PAGE && start + i < resourcesShown.size(); i++) {
+			Materials.Entry e = resourcesShown.get(start + i);
+			int y = resListY + i * RES_ROW;
+			if (i % 2 == 0) g.fill(x, y - 1, x + W, y + RES_ROW - 1, 0x30FFFFFF);
+			ItemStack stack = new ItemStack(e.item());
+			g.item(stack, x + 1, y);
+			String name = trim(stack.getHoverName().getString(), 140);
+			int ty = y + 4;
+			g.text(font, name, x + 20, ty, WHITE, true);
+			centered(g, String.valueOf(e.total()), x + 190, ty, WHITE);
+			centered(g, String.valueOf(e.missing()), x + 232, ty, e.missing() == 0 ? 0xFF55FF55 : 0xFFFFD000);
+			int invColor = e.missing() == 0 || e.inInventory() >= e.missing() ? 0xFF55FF55 : 0xFFFF5555;
+			centered(g, String.valueOf(e.inInventory()), x + 276, ty, invColor);
+		}
+	}
+
+	private void centered(GuiGraphicsExtractor g, String s, int cx, int y, int color) {
+		g.text(font, s, cx - font.width(s) / 2, y, color, true);
+	}
+
+	private String trim(String s, int maxWidth) {
+		if (font.width(s) <= maxWidth) return s;
+		while (s.length() > 1 && font.width(s + "…") > maxWidth) s = s.substring(0, s.length() - 1);
+		return s + "…";
 	}
 
 	// ================================================================ Paramètres
@@ -430,6 +545,7 @@ public class SchemaScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
+		if (tab == Tab.RESOURCES) renderResources(g);
 		for (Label l : labels) {
 			String text = l.text().get();
 			int x = l.centered() ? l.x() - font.width(text) / 2 : l.x();
