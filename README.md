@@ -19,7 +19,10 @@ Touches modifiables dans Options → Commandes → SchemaCraft.
 ## Menu (onglets)
 
 - **Sélection** : coordonnées des 2 coins, taille, sauvegarde sous un nom.
-- **Schémas** : liste des schémas (`<instance>/schemas/*.schema`), clic = charger.
+- **Schémas** : liste des schémas, clic = charger :
+  `<instance>/schemas/*.schema`, et les `.litematic` de `schemas/` et `schematics/`
+  (dossier de Litematica, sous-dossiers compris). Pour un `.litematic`, toutes les régions sont
+  fusionnées ; le contenu des coffres et les entités sont ignorés.
 - **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), rotation ±90°, miroir X/Z (comme Litematica), mode d'affichage, couches, retirer.
 - **Ressources** : objets nécessaires (total, à poser, dans l'inventaire), filtre « à chercher ».
 - **Paramètres** : printer (on/off, délai, blocs par pose, portée, couche affichée seulement).

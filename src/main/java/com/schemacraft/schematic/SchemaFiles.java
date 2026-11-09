@@ -47,12 +47,35 @@ public final class SchemaFiles {
 		NbtIo.writeCompressed(schematic.toNbt(), fileFor(schematic.name()));
 	}
 
-	public static Schematic load(String name) throws IOException {
-		CompoundTag tag = NbtIo.readCompressed(fileFor(name), NbtAccounter.unlimitedHeap());
-		return Schematic.fromNbt(tag, name);
+	/**
+	 * Charge une entrée de {@link #list()} : soit le nom d'un .schema,
+	 * soit le chemin (relatif au dossier du jeu) d'un .litematic.
+	 */
+	public static Schematic load(String entry) throws IOException {
+		if (isLitematic(entry)) {
+			Path file = Minecraft.getInstance().gameDirectory.toPath().resolve(entry);
+			return LitematicReader.read(file, displayName(entry));
+		}
+		CompoundTag tag = NbtIo.readCompressed(fileFor(entry), NbtAccounter.unlimitedHeap());
+		return Schematic.fromNbt(tag, entry);
 	}
 
-	/** Noms (sans extension) des schémas, triés alphabétiquement. */
+	public static boolean isLitematic(String entry) {
+		return entry.endsWith(LitematicReader.EXTENSION);
+	}
+
+	/** Nom affiché : nom du fichier sans dossier ni extension. */
+	public static String displayName(String entry) {
+		if (!isLitematic(entry)) return entry;
+		String f = entry.substring(entry.lastIndexOf('/') + 1);
+		return f.substring(0, f.length() - LitematicReader.EXTENSION.length());
+	}
+
+	/**
+	 * Schémas disponibles, triés alphabétiquement :
+	 * les .schema de "schemas/" (par nom) puis les .litematic de "schemas/" et
+	 * "schematics/" (dossier de Litematica, sous-dossiers compris) par chemin relatif.
+	 */
 	public static List<String> list() {
 		List<String> names = new ArrayList<>();
 		try (Stream<Path> files = Files.list(dir())) {
@@ -64,6 +87,20 @@ public final class SchemaFiles {
 		} catch (IOException ignored) {
 		}
 		names.sort(String.CASE_INSENSITIVE_ORDER);
+
+		List<String> litematics = new ArrayList<>();
+		Path game = Minecraft.getInstance().gameDirectory.toPath();
+		for (String folder : new String[] {"schemas", "schematics"}) {
+			Path dir = game.resolve(folder);
+			if (!Files.isDirectory(dir)) continue;
+			try (Stream<Path> files = Files.walk(dir, 4)) {
+				files.filter(p -> Files.isRegularFile(p) && p.getFileName().toString().endsWith(LitematicReader.EXTENSION))
+					.forEach(p -> litematics.add(game.relativize(p).toString().replace('\\', '/')));
+			} catch (IOException ignored) {
+			}
+		}
+		litematics.sort((a, b) -> String.CASE_INSENSITIVE_ORDER.compare(displayName(a), displayName(b)));
+		names.addAll(litematics);
 		return names;
 	}
 }
