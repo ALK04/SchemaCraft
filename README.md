@@ -7,7 +7,7 @@ Mini-Litematica côté client : sélection, schémas, hologramme, affichage couc
 1. **Installer Fabric** pour Minecraft **26.3** : télécharger l'installeur sur <https://fabricmc.net/use/installer/>,
    le lancer, choisir la version `26.3`, puis *Install*. Un profil « fabric-loader-26.3 » apparaît dans le launcher.
 2. **Télécharger les deux mods** :
-   - `schemacraft-1.4.0.jar` : onglet **Releases** de ce dépôt (à droite sur la page GitHub) → *Assets*.
+   - `schemacraft-1.5.0.jar` : onglet **Releases** de ce dépôt (à droite sur la page GitHub) → *Assets*.
    - **Fabric API** pour 26.3 : <https://modrinth.com/mod/fabric-api> (filtrer sur la version 26.3).
 3. **Les copier dans le dossier `mods`** :
    - Launcher officiel : `Win + R` → taper `%appdata%\.minecraft` → ouvrir (ou créer) le dossier `mods`.
