@@ -7,7 +7,7 @@ Mini-Litematica côté client : sélection, schémas, hologramme, affichage couc
 1. **Installer Fabric** pour Minecraft **26.3** : télécharger l'installeur sur <https://fabricmc.net/use/installer/>,
    le lancer, choisir la version `26.3`, puis *Install*. Un profil « fabric-loader-26.3 » apparaît dans le launcher.
 2. **Télécharger les deux mods** :
-   - `schemacraft-1.5.0.jar` : onglet **Releases** de ce dépôt (à droite sur la page GitHub) → *Assets*.
+   - `schemacraft-1.6.0.jar` : onglet **Releases** de ce dépôt (à droite sur la page GitHub) → *Assets*.
    - **Fabric API** pour 26.3 : <https://modrinth.com/mod/fabric-api> (filtrer sur la version 26.3).
 3. **Les copier dans le dossier `mods`** :
    - Launcher officiel : `Win + R` → taper `%appdata%\.minecraft` → ouvrir (ou créer) le dossier `mods`.
@@ -38,13 +38,16 @@ Touches modifiables dans Options → Commandes → SchemaCraft.
   `<instance>/schemas/*.schema`, et les `.litematic` de `schemas/` et `schematics/`
   (dossier de Litematica, sous-dossiers compris). Pour un `.litematic`, toutes les régions sont
   fusionnées ; le contenu des coffres et les entités sont ignorés.
-- **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), rotation ±90°, miroir X/Z (comme Litematica), mode d'affichage, couches, retirer.
+- **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), rotation ±90°, miroir X/Z (comme Litematica), mode d'affichage, couches, **Visible / Masqué** (masqué = printer en pause), retirer.
 - **Ressources** : objets nécessaires (total, à poser, dans l'inventaire), filtre « à chercher ».
 - **Édition** : modifier les blocs du schéma chargé, l'hologramme se met à jour aussitôt.
-  - Remplacer un mot dans tous les noms : `oak` → `spruce` change bûches, planches, escaliers, feuilles...
-    en gardant l'orientation (les blocs qui n'existent pas, comme `dark_spruce_log`, sont ignorés et signalés).
-  - Clic sur un bloc de la liste, puis écrire le remplaçant : `spruce_planks`, ou un mélange
-    `stone 60, andesite 30, cobblestone 10` (positions tirées au hasard). « Retirer » enlève ce bloc.
+  - Une seule ligne **Remplacer [ … ] par [ … ]**, avec autocomplétion comme pour les commandes
+    (↑/↓ ou molette pour choisir, Tab / Entrée / clic pour compléter, Échap pour fermer).
+    Un aperçu indique ce qui va changer avant de valider.
+  - **Un bloc** (clic dans la liste ou `oak_log`) → un bloc (`stone`), ou un mélange
+    `stone 60, andesite 30, cobblestone 10` (positions tirées au hasard). `air` ou « Retirer le bloc » l'enlève.
+  - **Un mot** (`oak`) → un autre mot (`spruce`) : change bûches, planches, escaliers, feuilles... en gardant
+    l'orientation (les blocs qui n'existent pas, comme `dark_spruce_log`, sont ignorés et signalés).
   - Annuler (10 niveaux), puis « Enregistrer sous » un nouveau `.schema` dans `schemas/`.
 - **Paramètres** : printer (on/off, délai, blocs par pose, portée, couche affichée seulement).
   Sauvegardés dans `config/schemacraft.properties`.

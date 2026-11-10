@@ -74,7 +74,7 @@ public final class Printer {
 
 	public static void tick(Minecraft mc) {
 		tickCount++;
-		if (!Settings.printerEnabled || !SchemaState.isPlaced()) return;
+		if (!Settings.printerEnabled || !SchemaState.isPlaced() || !SchemaState.visible) return;
 		LocalPlayer player = mc.player;
 		ClientLevel level = mc.level;
 		if (player == null || level == null || mc.gameMode == null || mc.gui.screen() != null) return;

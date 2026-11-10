@@ -22,6 +22,8 @@ public final class SchemaState {
 
 	// --- Affichage ---
 	public static boolean layerMode;
+	/** Hologramme et cadre affichés (bouton Visible / Masqué). Masqué = printer en pause. */
+	public static boolean visible = true;
 	/** Couche affichée (Y absolu) en mode couche par couche. */
 	public static int layer;
 
@@ -35,6 +37,7 @@ public final class SchemaState {
 
 	public static void setLoaded(Schematic schematic) {
 		editHistory.clear();
+		visible = true;
 		base = schematic;
 		loaded = schematic;
 		rotation = Rotation.NONE;
@@ -45,6 +48,7 @@ public final class SchemaState {
 
 	public static void unload() {
 		editHistory.clear();
+		visible = true;
 		base = null;
 		loaded = null;
 		rotation = Rotation.NONE;

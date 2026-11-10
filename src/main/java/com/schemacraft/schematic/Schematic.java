@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtUtils;
@@ -157,7 +156,7 @@ public final class Schematic {
 		ListTag paletteTag = tag.getListOrEmpty("Palette");
 		List<BlockState> palette = new ArrayList<>(paletteTag.size());
 		for (int i = 0; i < paletteTag.size(); i++) {
-			palette.add(NbtUtils.readBlockState(BuiltInRegistries.BLOCK, paletteTag.getCompoundOrEmpty(i)));
+			palette.add(BlockStates.fromNbt(paletteTag.getCompoundOrEmpty(i)));
 		}
 		if (palette.isEmpty()) palette.add(Blocks.AIR.defaultBlockState());
 		int[] blocks = tag.getIntArray("Blocks").orElseThrow(() -> new IllegalArgumentException("Blocks manquant"));

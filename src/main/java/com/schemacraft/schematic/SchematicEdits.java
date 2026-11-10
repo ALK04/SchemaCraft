@@ -4,15 +4,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.NbtUtils;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -20,19 +16,18 @@ import net.minecraft.world.level.block.state.BlockState;
 /**
  * Modifications d'un schéma (onglet Édition). Chaque opération renvoie un nouveau
  * {@link Schematic} : l'ancien reste intact, ce qui permet d'annuler.
- * Les blocs sont désignés par leur identifiant ("spruce_log", "minecraft:stone"...).
- * Quand on change de bloc, les propriétés communes (orientation, moitié, eau...) sont gardées.
+ * Quand un bloc change, les propriétés communes (orientation, moitié, eau...) sont gardées.
  */
 public final class SchematicEdits {
 	private SchematicEdits() {}
 
 	/** Un type de bloc présent dans le schéma (toutes orientations confondues). */
-	public record Entry(Block block, BlockState sample, String id, int count) {}
+	public record Entry(Block block, String id, int count) {}
 
-	/** Une part d'un mélange : identifiant du bloc et poids (pourcentage). */
-	public record MixPart(String id, int weight) {}
+	/** Une part d'un mélange : bloc et poids (pourcentage). */
+	public record MixPart(Block block, String id, int weight) {}
 
-	/** Résultat d'un remplacement par mots. */
+	/** Résultat d'un remplacement par mot. */
 	public record WordResult(Schematic schematic, int replaced, List<String> changes, List<String> skipped) {}
 
 	/** Blocs (hors air) du schéma, du plus fréquent au moins fréquent. */
@@ -41,59 +36,18 @@ public final class SchematicEdits {
 		int[] perIndex = new int[palette.size()];
 		for (int b : s.blocksCopy()) perIndex[b]++;
 		Map<Block, int[]> counts = new LinkedHashMap<>();
-		Map<Block, BlockState> samples = new HashMap<>();
 		for (int i = 0; i < palette.size(); i++) {
 			BlockState state = palette.get(i);
 			if (perIndex[i] == 0 || state.isAir()) continue;
 			counts.computeIfAbsent(state.getBlock(), k -> new int[1])[0] += perIndex[i];
-			samples.putIfAbsent(state.getBlock(), state);
 		}
 		List<Entry> out = new ArrayList<>();
-		for (Map.Entry<Block, int[]> e : counts.entrySet()) {
-			BlockState sample = samples.get(e.getKey());
-			out.add(new Entry(e.getKey(), sample, idOf(sample), e.getValue()[0]));
-		}
+		counts.forEach((block, n) -> out.add(new Entry(block, BlockStates.idOf(block), n[0])));
 		out.sort((a, b) -> b.count() != a.count() ? Integer.compare(b.count(), a.count()) : a.id().compareTo(b.id()));
 		return out;
 	}
 
-	/** "minecraft:oak_log" -> "oak_log" (garde l'espace de noms des blocs moddés). */
-	public static String idOf(BlockState state) {
-		String name = NbtUtils.writeBlockState(state).getStringOr("Name", "minecraft:air");
-		return name.startsWith("minecraft:") ? name.substring(10) : name;
-	}
-
-	/** Met l'identifiant au propre : minuscules, espaces -> "_", sans "minecraft:". */
-	public static String normalize(String id) {
-		String s = id.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
-		return s.startsWith("minecraft:") ? s.substring(10) : s;
-	}
-
-	/** Vrai si ce bloc existe dans la version du jeu. */
-	public static boolean exists(String id) {
-		String n = normalize(id);
-		if (!n.matches("[a-z0-9_.\\-/:]+")) return false;
-		return n.equals("air") || !read(n, new CompoundTag()).isAir();
-	}
-
-	/**
-	 * Même état que {@code from} mais avec un autre bloc : les propriétés que le nouveau bloc
-	 * possède sont gardées (les autres sont ignorées). Null si le bloc n'existe pas.
-	 */
-	public static BlockState withBlock(BlockState from, String id) {
-		if (!exists(id)) return null;
-		CompoundTag props = NbtUtils.writeBlockState(from).getCompoundOrEmpty("Properties");
-		return read(normalize(id), props);
-	}
-
-	private static BlockState read(String id, CompoundTag props) {
-		CompoundTag tag = new CompoundTag();
-		tag.putString("Name", id.contains(":") ? id : "minecraft:" + id);
-		if (!props.keySet().isEmpty()) tag.put("Properties", props.copy());
-		return NbtUtils.readBlockState(BuiltInRegistries.BLOCK, tag);
-	}
-
-	// ================================================================ Remplacer par mots
+	// ================================================================ Remplacer par mot
 
 	/** Si le résultat n'existe pas, essais de remplacement (ex. crimson_log -> crimson_stem). */
 	private static final String[][] ALIASES = {
@@ -101,16 +55,24 @@ public final class SchematicEdits {
 	};
 	private static final Map<String, String> SPECIAL = Map.of(
 		"crimson_leaves", "nether_wart_block",
-		"warped_leaves", "warped_wart_block",
-		"poplar_leaves", "yellow_poplar_leaves");
+		"warped_leaves", "warped_wart_block");
+
+	/** Nombre de types de blocs du schéma dont le nom contient ce mot. */
+	public static int typesWithWord(List<Entry> entries, String word) {
+		String w = BlockStates.normalize(word);
+		int n = 0;
+		for (Entry e : entries) if (replaceWord(e.id(), w, "x") != null) n++;
+		return n;
+	}
 
 	/**
 	 * Remplace un mot dans le nom de chaque bloc, mot entier entre "_" :
 	 * "oak" -> "spruce" change oak_log, stripped_oak_log, oak_stairs... mais pas dark_oak_log
 	 * (dark_spruce_log n'existe pas : il est ignoré et listé dans {@code skipped}).
+	 * Un remplaçant vide enlève le mot ("stripped" -> "" : stripped_oak_log -> oak_log).
 	 */
 	public static WordResult replaceWords(Schematic s, String find, String repl) {
-		String f = normalize(find), r = normalize(repl);
+		String f = BlockStates.normalize(find), r = BlockStates.normalize(repl);
 		List<BlockState> palette = s.palette();
 		List<BlockState> out = new ArrayList<>(palette.size());
 		Map<String, String> changes = new LinkedHashMap<>();
@@ -118,19 +80,19 @@ public final class SchematicEdits {
 		boolean[] changed = new boolean[palette.size()];
 		for (int i = 0; i < palette.size(); i++) {
 			BlockState state = palette.get(i);
-			String id = idOf(state);
+			String id = BlockStates.idOf(state);
 			String target = state.isAir() || f.isEmpty() ? null : replaceWord(id, f, r);
 			if (target == null || target.equals(id)) {
 				out.add(state);
 				continue;
 			}
 			target = resolveAlias(target);
-			BlockState replaced = withBlock(state, target);
-			if (replaced == null) {
-				if (!skipped.contains(id + " -> " + target)) skipped.add(id + " -> " + target);
+			Block block = BlockStates.block(target);
+			if (block == null) {
+				if (!skipped.contains(target)) skipped.add(target);
 				out.add(state);
 			} else {
-				out.add(replaced);
+				out.add(BlockStates.withBlock(state, block));
 				changes.put(id, target);
 				changed[i] = true;
 			}
@@ -139,11 +101,12 @@ public final class SchematicEdits {
 		int count = 0;
 		for (int b : blocks) if (changed[b]) count++;
 		List<String> changeList = new ArrayList<>();
-		changes.forEach((a, b) -> changeList.add(a + " -> " + b));
-		return new WordResult(Schematic.of(s.name(), s.sizeX(), s.sizeY(), s.sizeZ(), out, blocks), count, changeList, skipped);
+		changes.forEach((a, b) -> changeList.add(a + " → " + b));
+		return new WordResult(compact(s, out, blocks), count, changeList, skipped);
 	}
 
 	static String replaceWord(String id, String find, String repl) {
+		if (find.isEmpty()) return null;
 		String ns = "";
 		int colon = id.indexOf(':');
 		if (colon >= 0) {
@@ -168,13 +131,13 @@ public final class SchematicEdits {
 	}
 
 	private static String resolveAlias(String id) {
-		if (exists(id)) return id;
+		if (BlockStates.exists(id)) return id;
 		String special = SPECIAL.get(id);
-		if (special != null && exists(special)) return special;
+		if (special != null && BlockStates.exists(special)) return special;
 		for (String[] a : ALIASES) {
 			if (id.endsWith(a[0])) {
 				String alt = id.substring(0, id.length() - a[0].length()) + a[1];
-				if (exists(alt)) return alt;
+				if (BlockStates.exists(alt)) return alt;
 			}
 		}
 		return id;
@@ -185,34 +148,55 @@ public final class SchematicEdits {
 	private static final Pattern PART = Pattern.compile("^([a-z0-9_.\\-/:]+)(?:\\s+(\\d{1,3})\\s*%?)?$");
 
 	/**
-	 * Lit "spruce_log" ou "stone 60, andesite 30, cobblestone 10" (le % est facultatif).
-	 * Sans pourcentages, les blocs sont répartis également. Erreur explicite sinon.
+	 * Lit "spruce_planks" ou "stone 60, andesite 30, cobblestone 10" (le % est facultatif).
+	 * Sans pourcentages, les blocs sont répartis également. "air" = retirer.
+	 * @throws IllegalArgumentException avec un message lisible si le texte est invalide
 	 */
 	public static List<MixPart> parseMix(String text) {
 		List<MixPart> parts = new ArrayList<>();
 		int withWeight = 0;
 		for (String raw : text.split("[,;+]")) {
-			String p = raw.trim().toLowerCase(Locale.ROOT);
+			String p = raw.trim().toLowerCase(java.util.Locale.ROOT);
 			if (p.isEmpty()) continue;
 			Matcher m = PART.matcher(p);
-			if (!m.matches()) throw new IllegalArgumentException("« " + raw.trim() + " » : écris le nom du bloc puis son pourcentage, ex. stone 60");
-			String id = normalize(m.group(1));
-			if (!exists(id)) throw new IllegalArgumentException("« " + id + " » n'existe pas dans cette version");
+			if (!m.matches()) throw new IllegalArgumentException("« " + raw.trim() + " » : écris le bloc puis son %, ex. stone 60");
+			String id = BlockStates.normalize(m.group(1));
+			Block block = BlockStates.block(id);
+			if (block == null) throw new IllegalArgumentException("« " + id + " » n'existe pas");
 			int w = m.group(2) == null ? -1 : Integer.parseInt(m.group(2));
 			if (w >= 0) withWeight++;
-			parts.add(new MixPart(id, w));
+			parts.add(new MixPart(block, id, w));
 		}
-		if (parts.isEmpty()) throw new IllegalArgumentException("écris le nom d'un bloc, ex. spruce_planks");
+		if (parts.isEmpty()) throw new IllegalArgumentException("écris un bloc, ex. stone");
 		if (withWeight == 0) {
 			List<MixPart> even = new ArrayList<>();
-			for (MixPart p : parts) even.add(new MixPart(p.id(), 1));
+			for (MixPart p : parts) even.add(new MixPart(p.block(), p.id(), 1));
 			return even;
 		}
-		if (withWeight != parts.size()) throw new IllegalArgumentException("donne un pourcentage à chaque bloc du mélange");
+		if (withWeight != parts.size()) throw new IllegalArgumentException("donne un % à chaque bloc du mélange");
 		int total = 0;
 		for (MixPart p : parts) total += p.weight();
 		if (total <= 0) throw new IllegalArgumentException("les pourcentages valent tous 0");
 		return parts;
+	}
+
+	/** "stone" ou "stone 60%, andesite 40%" (pourcentages ramenés sur 100). */
+	public static String describe(List<MixPart> parts) {
+		if (parts.size() == 1) return parts.get(0).id();
+		int total = 0;
+		for (MixPart p : parts) total += p.weight();
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < parts.size(); i++) {
+			if (i > 0) sb.append(", ");
+			sb.append(parts.get(i).id()).append(' ').append(Math.round(100.0 * parts.get(i).weight() / total)).append('%');
+		}
+		return sb.toString();
+	}
+
+	/** Nombre de blocs {@code block} dans le schéma. */
+	public static int count(List<Entry> entries, Block block) {
+		for (Entry e : entries) if (e.block() == block) return e.count();
+		return 0;
 	}
 
 	/**
@@ -222,15 +206,17 @@ public final class SchematicEdits {
 	public static Schematic mix(Schematic s, Block from, List<MixPart> parts, Random random) {
 		List<BlockState> palette = s.palette();
 		int[] blocks = s.blocksCopy();
-		List<Integer> positions = new ArrayList<>();
-		for (int i = 0; i < blocks.length; i++) {
-			if (palette.get(blocks[i]).getBlock() == from) positions.add(i);
-		}
-		for (int i = positions.size() - 1; i > 0; i--) {
+
+		int n = 0;
+		for (int b : blocks) if (palette.get(b).getBlock() == from) n++;
+		int[] positions = new int[n];
+		n = 0;
+		for (int i = 0; i < blocks.length; i++) if (palette.get(blocks[i]).getBlock() == from) positions[n++] = i;
+		for (int i = positions.length - 1; i > 0; i--) {
 			int j = random.nextInt(i + 1);
-			Integer t = positions.get(i);
-			positions.set(i, positions.get(j));
-			positions.set(j, t);
+			int t = positions[i];
+			positions[i] = positions[j];
+			positions[j] = t;
 		}
 		int total = 0;
 		for (MixPart p : parts) total += p.weight();
@@ -238,21 +224,21 @@ public final class SchematicEdits {
 		List<BlockState> newPalette = new ArrayList<>(palette);
 		Map<BlockState, Integer> ids = new HashMap<>();
 		for (int i = 0; i < newPalette.size(); i++) ids.putIfAbsent(newPalette.get(i), i);
-		// Cache : (index de palette d'origine, part du mélange) -> nouvel index de palette
+		// (index de palette d'origine, part du mélange) -> nouvel index
 		Map<Long, Integer> cache = new HashMap<>();
 
 		int k = 0, acc = 0;
 		for (int pi = 0; pi < parts.size(); pi++) {
 			acc += parts.get(pi).weight();
-			int end = pi == parts.size() - 1 ? positions.size() : (int) Math.round((double) acc / total * positions.size());
+			int end = pi == parts.size() - 1 ? positions.length : (int) Math.round((double) acc / total * positions.length);
 			for (; k < end; k++) {
-				int pos = positions.get(k);
+				int pos = positions[k];
 				int old = blocks[pos];
-				long key = ((long) old << 8) | pi;
+				long key = ((long) old << 16) | pi;
 				Integer id = cache.get(key);
 				if (id == null) {
-					BlockState target = withBlock(palette.get(old), parts.get(pi).id());
-					if (target == null || target.isAir()) {
+					BlockState target = BlockStates.withBlock(palette.get(old), parts.get(pi).block());
+					if (target.isAir()) {
 						id = 0;
 					} else {
 						id = ids.get(target);
@@ -267,7 +253,7 @@ public final class SchematicEdits {
 				blocks[pos] = id;
 			}
 		}
-		return Schematic.of(s.name(), s.sizeX(), s.sizeY(), s.sizeZ(), newPalette, blocks);
+		return compact(s, newPalette, blocks);
 	}
 
 	/** Retire tous les blocs {@code block} (remplacés par de l'air). */
@@ -275,6 +261,40 @@ public final class SchematicEdits {
 		List<BlockState> palette = s.palette();
 		List<BlockState> out = new ArrayList<>(palette.size());
 		for (BlockState state : palette) out.add(state.getBlock() == block ? Blocks.AIR.defaultBlockState() : state);
-		return Schematic.of(s.name(), s.sizeX(), s.sizeY(), s.sizeZ(), out, s.blocksCopy());
+		return compact(s, out, s.blocksCopy());
+	}
+
+	/**
+	 * Nouveau schéma avec une palette nettoyée : air en 0, états en double fusionnés,
+	 * entrées plus utilisées supprimées (le fichier enregistré reste léger).
+	 */
+	private static Schematic compact(Schematic s, List<BlockState> palette, int[] blocks) {
+		List<BlockState> out = new ArrayList<>();
+		Map<BlockState, Integer> ids = new HashMap<>();
+		BlockState air = Blocks.AIR.defaultBlockState();
+		out.add(air);
+		int[] remap = new int[palette.size()];
+		java.util.Arrays.fill(remap, -1);
+		for (int i = 0; i < blocks.length; i++) {
+			int old = blocks[i];
+			int id = remap[old];
+			if (id < 0) {
+				BlockState state = palette.get(old);
+				if (state.isAir()) {
+					id = 0;
+				} else {
+					Integer existing = ids.get(state);
+					if (existing == null) {
+						existing = out.size();
+						out.add(state);
+						ids.put(state, existing);
+					}
+					id = existing;
+				}
+				remap[old] = id;
+			}
+			blocks[i] = id;
+		}
+		return Schematic.of(s.name(), s.sizeX(), s.sizeY(), s.sizeZ(), out, blocks);
 	}
 }
