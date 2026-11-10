@@ -34,6 +34,7 @@ public final class SchemaState {
 	}
 
 	public static void setLoaded(Schematic schematic) {
+		editHistory.clear();
 		base = schematic;
 		loaded = schematic;
 		rotation = Rotation.NONE;
@@ -43,6 +44,7 @@ public final class SchemaState {
 	}
 
 	public static void unload() {
+		editHistory.clear();
 		base = null;
 		loaded = null;
 		rotation = Rotation.NONE;
@@ -80,6 +82,33 @@ public final class SchemaState {
 		loaded = base.transformed(rotation, mirror);
 		clampLayer();
 		GhostRenderer.markDirty();
+	}
+
+	// --- Édition (onglet Édition) ---
+	private static final int MAX_UNDO = 10;
+	/** Versions précédentes du schéma, la plus récente en tête. */
+	private static final java.util.Deque<Schematic> editHistory = new java.util.ArrayDeque<>();
+
+	/**
+	 * Remplace le schéma par sa version modifiée (sans rotation ni miroir) en gardant
+	 * placement, rotation et miroir : l'hologramme se met à jour tout de suite.
+	 */
+	public static void applyEdit(Schematic edited) {
+		if (base == null) return;
+		editHistory.push(base);
+		while (editHistory.size() > MAX_UNDO) editHistory.removeLast();
+		base = edited;
+		applyTransform();
+	}
+
+	public static boolean canUndoEdit() {
+		return !editHistory.isEmpty();
+	}
+
+	public static void undoEdit() {
+		if (editHistory.isEmpty()) return;
+		base = editHistory.pop();
+		applyTransform();
 	}
 
 	public static String rotationText() {

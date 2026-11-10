@@ -40,6 +40,12 @@ Touches modifiables dans Options → Commandes → SchemaCraft.
   fusionnées ; le contenu des coffres et les entités sont ignorés.
 - **Placement** : coin du schéma, déplacement X/Y/Z (shift = 10 blocs), rotation ±90°, miroir X/Z (comme Litematica), mode d'affichage, couches, retirer.
 - **Ressources** : objets nécessaires (total, à poser, dans l'inventaire), filtre « à chercher ».
+- **Édition** : modifier les blocs du schéma chargé, l'hologramme se met à jour aussitôt.
+  - Remplacer un mot dans tous les noms : `oak` → `spruce` change bûches, planches, escaliers, feuilles...
+    en gardant l'orientation (les blocs qui n'existent pas, comme `dark_spruce_log`, sont ignorés et signalés).
+  - Clic sur un bloc de la liste, puis écrire le remplaçant : `spruce_planks`, ou un mélange
+    `stone 60, andesite 30, cobblestone 10` (positions tirées au hasard). « Retirer » enlève ce bloc.
+  - Annuler (10 niveaux), puis « Enregistrer sous » un nouveau `.schema` dans `schemas/`.
 - **Paramètres** : printer (on/off, délai, blocs par pose, portée, couche affichée seulement).
   Sauvegardés dans `config/schemacraft.properties`.
 

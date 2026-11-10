@@ -12,6 +12,7 @@ import com.schemacraft.Settings;
 import com.schemacraft.schematic.Materials;
 import com.schemacraft.schematic.SchemaFiles;
 import com.schemacraft.schematic.Schematic;
+import com.schemacraft.schematic.SchematicEdits;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -21,14 +22,15 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
 
 /**
  * Menu principal (touche ","), organisé en onglets :
- *  Sélection | Schémas | Placement | Paramètres
+ *  Sélection | Schémas | Placement | Ressources | Édition | Paramètres
  */
 public class SchemaScreen extends Screen {
 	private enum Tab {
-		SELECTION("Sélection"), SCHEMAS("Schémas"), PLACEMENT("Placement"), RESOURCES("Ressources"), SETTINGS("Paramètres");
+		SELECTION("Sélection"), SCHEMAS("Schémas"), PLACEMENT("Placement"), RESOURCES("Ressources"), EDIT("Édition"), SETTINGS("Paramètres");
 
 		final String label;
 
@@ -43,6 +45,7 @@ public class SchemaScreen extends Screen {
 	private static final int RES_PER_PAGE = 7;
 	private static final int RES_ROW = 17;
 	private static final long MAX_BLOCKS = 4_000_000L;
+	private static final int EDIT_PER_PAGE = 4;
 
 	private static final int GRAY = 0xFFAAAAAA;
 	private static final int WHITE = 0xFFFFFFFF;
@@ -53,6 +56,17 @@ public class SchemaScreen extends Screen {
 	private static int resPage;
 	private static boolean resOnlyMissing;
 	private static String lastName = "";
+
+	// Onglet Édition (gardé entre deux ouvertures du menu)
+	private static int editPage;
+	private static Block editSelected;
+	private static String editFind = "";
+	private static String editRepl = "";
+	private static String editMix = "";
+	private static String editSaveName = "";
+	/** Nom du schéma auquel se rapportent les champs ci-dessus. */
+	private static String editFor = "";
+	private static final java.util.Random RANDOM = new java.util.Random();
 
 	/** Texte affiché à une position donnée, recalculé à chaque image. */
 	private record Label(Supplier<String> text, int x, int y, int color, boolean centered) {}
@@ -74,6 +88,15 @@ public class SchemaScreen extends Screen {
 	private List<Materials.Entry> resourcesShown = List.of();
 	private int resListX;
 	private int resListY;
+
+	/** Lignes de l'onglet Édition (pour dessiner les icônes) et champs. */
+	private record EditRow(SchematicEdits.Entry entry, int x, int y) {}
+	private final List<EditRow> editRows = new ArrayList<>();
+	private EditBox editFindBox;
+	private EditBox editReplBox;
+	private EditBox editMixBox;
+	private EditBox editSaveBox;
+	private String pendingEditOverwrite;
 
 	public SchemaScreen() {
 		super(Component.literal("SchemaCraft"));
@@ -101,20 +124,23 @@ public class SchemaScreen extends Screen {
 	@Override
 	protected void init() {
 		labels.clear();
+		editRows.clear();
 		int x = cx();
 		int y0 = top();
 
 		label(() -> "SchemaCraft", width / 2, y0, 0xFFFFD000, true);
 
-		// Onglets
+		// Onglets (un peu plus larges que le panneau si l'écran le permet)
 		Tab[] tabs = Tab.values();
-		int tw = (W - (tabs.length - 1) * 2) / tabs.length;
+		int tabsW = Math.max(W, Math.min(width - 12, 372));
+		int tx = width / 2 - tabsW / 2;
+		int tw = (tabsW - (tabs.length - 1) * 2) / tabs.length;
 		for (int i = 0; i < tabs.length; i++) {
 			Tab t = tabs[i];
 			Button b = addRenderableWidget(Button.builder(Component.literal(t.label), btn -> {
 				tab = t;
 				rebuildWidgets();
-			}).bounds(x + i * (tw + 2), y0 + 12, tw, 20).build());
+			}).bounds(tx + i * (tw + 2), y0 + 12, tw, 20).build());
 			b.active = tab != t;
 		}
 
@@ -124,6 +150,7 @@ public class SchemaScreen extends Screen {
 			case SCHEMAS -> initSchemas(x, c);
 			case PLACEMENT -> initPlacement(x, c);
 			case RESOURCES -> initResources(x, c);
+			case EDIT -> initEdit(x, c);
 			case SETTINGS -> initSettings(x, c);
 		}
 	}
@@ -404,6 +431,206 @@ public class SchemaScreen extends Screen {
 		return s + "…";
 	}
 
+	// ================================================================ Édition
+
+	private void initEdit(int x, int c) {
+		Schematic s = SchemaState.base;
+		if (s == null) {
+			label(() -> "Aucun schéma chargé (onglet Schémas)", x, c, GRAY, false);
+			label(() -> "Charge un schéma pour changer ses blocs :", x, c + 16, DARK, false);
+			label(() -> "remplacer, mélanger en %, supprimer.", x, c + 27, DARK, false);
+			return;
+		}
+		if (!s.name().equals(editFor)) {
+			editFor = s.name();
+			editSelected = null;
+			editPage = 0;
+			editMix = "";
+			editSaveName = "";
+		}
+		List<SchematicEdits.Entry> entries = SchematicEdits.entries(s);
+		if (editSelected != null && entries.stream().noneMatch(e -> e.block() == editSelected)) editSelected = null;
+		int pages = Math.max(1, (entries.size() + EDIT_PER_PAGE - 1) / EDIT_PER_PAGE);
+		if (editPage >= pages) editPage = pages - 1;
+		label(() -> s.name() + " : " + s.nonAirCount() + " blocs, " + entries.size() + " types", x, c, 0xFF55FFFF, false);
+
+		// --- Remplacer un mot dans tous les noms (oak -> spruce) ---
+		int y = c + 12;
+		editFindBox = new EditBox(font, x, y, 92, 20, Component.literal("Mot"));
+		editFindBox.setMaxLength(40);
+		editFindBox.setHint(Component.literal("oak"));
+		editFindBox.setValue(editFind);
+		editFindBox.setResponder(v -> editFind = v);
+		addRenderableWidget(editFindBox);
+		label(() -> "→", x + 100, y + 6, WHITE, true);
+		editReplBox = new EditBox(font, x + 108, y, 92, 20, Component.literal("Remplacer par"));
+		editReplBox.setMaxLength(40);
+		editReplBox.setHint(Component.literal("spruce"));
+		editReplBox.setValue(editRepl);
+		editReplBox.setResponder(v -> editRepl = v);
+		addRenderableWidget(editReplBox);
+		addRenderableWidget(Button.builder(Component.literal("Remplacer"), b -> replaceWords())
+			.bounds(x + 204, y, W - 204, 20).build());
+
+		// --- Liste des blocs : clic = choisir celui à modifier ---
+		y += ROW + 2;
+		int start = editPage * EDIT_PER_PAGE;
+		for (int i = 0; i < EDIT_PER_PAGE && start + i < entries.size(); i++) {
+			SchematicEdits.Entry e = entries.get(start + i);
+			int ry = y + i * ROW;
+			String text = trim(e.block().getName().getString(), 200) + "  x" + e.count();
+			boolean sel = e.block() == editSelected;
+			addRenderableWidget(Button.builder(Component.literal(sel ? "» " + text + " «" : text), b -> {
+				editSelected = e.block();
+				editMix = e.id();
+				rebuildWidgets();
+			}).bounds(x, ry, W, 20).build());
+			editRows.add(new EditRow(e, x, ry));
+		}
+
+		y += EDIT_PER_PAGE * ROW;
+		Button prev = addRenderableWidget(Button.builder(Component.literal("<"), b -> {
+			editPage--;
+			rebuildWidgets();
+		}).bounds(x, y, 24, 20).build());
+		prev.active = editPage > 0;
+		final int shownPages = pages;
+		label(() -> (editPage + 1) + " / " + shownPages, x + 49, y + 6, WHITE, true);
+		Button next = addRenderableWidget(Button.builder(Component.literal(">"), b -> {
+			editPage++;
+			rebuildWidgets();
+		}).bounds(x + 74, y, 24, 20).build());
+		next.active = editPage < pages - 1;
+		Button undo = addRenderableWidget(Button.builder(Component.literal("Annuler la modification"), b -> {
+			SchemaState.undoEdit();
+			setStatus("Modification annulée.", WHITE);
+			rebuildWidgets();
+		}).bounds(x + 102, y, W - 102, 20).build());
+		undo.active = SchemaState.canUndoEdit();
+
+		// --- Bloc choisi : remplacer, mélanger, retirer ---
+		y += ROW + 2;
+		Block sel = editSelected;
+		label(() -> sel == null ? "Clique un bloc pour le remplacer ou le mélanger."
+			: "Remplacer " + trim(sel.getName().getString(), 150) + " par :  (ex. stone 60, andesite 40)", x, y, sel == null ? DARK : GRAY, false);
+		y += 12;
+		editMixBox = new EditBox(font, x, y, W - 132, 20, Component.literal("Nouveau bloc"));
+		editMixBox.setMaxLength(256);
+		editMixBox.setHint(Component.literal("spruce_planks"));
+		editMixBox.setValue(sel == null ? "" : editMix);
+		editMixBox.setResponder(v -> editMix = v);
+		editMixBox.setEditable(sel != null);
+		addRenderableWidget(editMixBox);
+		Button apply = addRenderableWidget(Button.builder(Component.literal("Appliquer"), b -> applyMix())
+			.bounds(x + W - 128, y, 64, 20).build());
+		Button remove = addRenderableWidget(Button.builder(Component.literal("Retirer"), b -> removeSelected())
+			.bounds(x + W - 62, y, 62, 20).build());
+		apply.active = remove.active = sel != null;
+
+		// --- Enregistrer la version modifiée ---
+		y += ROW + 2;
+		editSaveBox = new EditBox(font, x, y, 170, 20, Component.literal("Nom"));
+		editSaveBox.setMaxLength(64);
+		editSaveBox.setHint(Component.literal("nom du schéma modifié"));
+		editSaveBox.setValue(editSaveName.isEmpty() ? SchemaFiles.sanitize(s.name()) + "_modifie" : editSaveName);
+		editSaveBox.setResponder(v -> {
+			editSaveName = v;
+			pendingEditOverwrite = null;
+		});
+		addRenderableWidget(editSaveBox);
+		addRenderableWidget(Button.builder(Component.literal("Enregistrer sous"), b -> saveEdited())
+			.bounds(x + 174, y, W - 174, 20).build());
+	}
+
+	private void renderEdit(GuiGraphicsExtractor g) {
+		for (EditRow r : editRows) {
+			ItemStack stack = new ItemStack(r.entry().block().asItem());
+			if (!stack.isEmpty()) g.item(stack, r.x() + 2, r.y() + 2);
+		}
+	}
+
+	private void replaceWords() {
+		Schematic s = SchemaState.base;
+		if (s == null) return;
+		String find = SchematicEdits.normalize(editFind);
+		if (find.isEmpty()) {
+			setStatus("Écris le mot à remplacer, ex. oak.", 0xFFFF5555);
+			return;
+		}
+		SchematicEdits.WordResult r = SchematicEdits.replaceWords(s, find, editRepl);
+		if (r.replaced() == 0) {
+			setStatus(r.skipped().isEmpty() ? "Aucun bloc ne contient « " + find + " »."
+				: "Rien de remplacé : " + r.skipped().get(0) + " n'existe pas.", 0xFFFF5555);
+			return;
+		}
+		SchemaState.applyEdit(r.schematic());
+		String msg = r.replaced() + " blocs remplacés (" + r.changes().size() + " types)";
+		if (!r.skipped().isEmpty()) msg += ", ignoré car inexistant : " + String.join(", ", r.skipped());
+		setStatus(trim(msg, width - 20), r.skipped().isEmpty() ? 0xFF55FF55 : 0xFFFFAA00);
+		rebuildWidgets();
+	}
+
+	private void applyMix() {
+		Schematic s = SchemaState.base;
+		if (s == null || editSelected == null) return;
+		List<SchematicEdits.MixPart> parts;
+		try {
+			parts = SchematicEdits.parseMix(editMix);
+		} catch (IllegalArgumentException e) {
+			setStatus(e.getMessage() + ".", 0xFFFF5555);
+			return;
+		}
+		String from = editSelected.getName().getString();
+		SchemaState.applyEdit(SchematicEdits.mix(s, editSelected, parts, RANDOM));
+		if (parts.size() == 1) {
+			setStatus(from + " → " + parts.get(0).id() + ".", 0xFF55FF55);
+		} else {
+			int total = 0;
+			for (SchematicEdits.MixPart p : parts) total += p.weight();
+			StringBuilder sb = new StringBuilder(from + " → ");
+			for (int i = 0; i < parts.size(); i++) {
+				if (i > 0) sb.append(", ");
+				sb.append(parts.get(i).id()).append(' ').append(Math.round(100.0 * parts.get(i).weight() / total)).append('%');
+			}
+			setStatus(trim(sb.toString(), width - 20), 0xFF55FF55);
+		}
+		editSelected = null;
+		rebuildWidgets();
+	}
+
+	private void removeSelected() {
+		Schematic s = SchemaState.base;
+		if (s == null || editSelected == null) return;
+		String from = editSelected.getName().getString();
+		SchemaState.applyEdit(SchematicEdits.remove(s, editSelected));
+		setStatus(from + " retiré du schéma.", 0xFF55FF55);
+		editSelected = null;
+		rebuildWidgets();
+	}
+
+	private void saveEdited() {
+		Schematic s = SchemaState.base;
+		if (s == null) return;
+		String name = SchemaFiles.sanitize(editSaveBox.getValue());
+		if (name.isEmpty()) {
+			setStatus("Donne un nom au schéma.", 0xFFFF5555);
+			return;
+		}
+		if (SchemaFiles.exists(name) && !name.equals(pendingEditOverwrite)) {
+			pendingEditOverwrite = name;
+			setStatus("« " + name + " » existe déjà : clique encore pour l'écraser.", 0xFFFFAA00);
+			return;
+		}
+		pendingEditOverwrite = null;
+		try {
+			SchemaFiles.save(s.renamed(name));
+			loadedEntry = name;
+			setStatus("Enregistré : schemas/" + name + SchemaFiles.EXTENSION, 0xFF55FF55);
+		} catch (IOException | RuntimeException e) {
+			setStatus("Erreur d'enregistrement : " + e.getMessage(), 0xFFFF5555);
+		}
+	}
+
 	// ================================================================ Paramètres
 
 	private void initSettings(int x, int c) {
@@ -572,6 +799,7 @@ public class SchemaScreen extends Screen {
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
 		if (tab == Tab.RESOURCES) renderResources(g);
+		if (tab == Tab.EDIT) renderEdit(g);
 		for (Label l : labels) {
 			String text = l.text().get();
 			int x = l.centered() ? l.x() - font.width(text) / 2 : l.x();
