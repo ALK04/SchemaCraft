@@ -168,6 +168,17 @@ public final class Schematic {
 		return new Schematic(name, size[0], size[1], size[2], palette, blocks);
 	}
 
+	/** Copie sous un autre nom (pour « Enregistrer sous »). */
+	public Schematic renamed(String newName) {
+		return new Schematic(newName, sizeX, sizeY, sizeZ, palette, blocks);
+	}
+
+	/** Palette (lecture seule) ; index 0 = air. */
+	public List<BlockState> palette() { return java.util.Collections.unmodifiableList(palette); }
+
+	/** Copie des index de palette, ordre (y * sizeZ + z) * sizeX + x. */
+	public int[] blocksCopy() { return blocks.clone(); }
+
 	public String name() { return name; }
 	public int sizeX() { return sizeX; }
 	public int sizeY() { return sizeY; }
