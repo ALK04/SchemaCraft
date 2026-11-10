@@ -3,12 +3,16 @@ package com.schemacraft.gui;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.schemacraft.SchemaCraftClient;
 import com.schemacraft.SchemaState;
 import com.schemacraft.Settings;
+import com.schemacraft.schematic.BlockStates;
 import com.schemacraft.schematic.Materials;
 import com.schemacraft.schematic.SchemaFiles;
 import com.schemacraft.schematic.Schematic;
@@ -19,6 +23,8 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
@@ -59,10 +65,10 @@ public class SchemaScreen extends Screen {
 
 	// Onglet Édition (gardé entre deux ouvertures du menu)
 	private static int editPage;
-	private static Block editSelected;
-	private static String editFind = "";
-	private static String editRepl = "";
-	private static String editMix = "";
+	/** Champ « Remplacer » : un bloc du schéma (oak_log) ou un mot (oak). */
+	private static String editFrom = "";
+	/** Champ « par » : un bloc, un mélange (stone 60, andesite 40) ou un mot. */
+	private static String editTo = "";
 	private static String editSaveName = "";
 	/** Nom du schéma auquel se rapportent les champs ci-dessus. */
 	private static String editFor = "";
@@ -92,10 +98,17 @@ public class SchemaScreen extends Screen {
 	/** Lignes de l'onglet Édition (pour dessiner les icônes) et champs. */
 	private record EditRow(SchematicEdits.Entry entry, int x, int y) {}
 	private final List<EditRow> editRows = new ArrayList<>();
-	private EditBox editFindBox;
-	private EditBox editReplBox;
-	private EditBox editMixBox;
+	private EditBox editFromBox;
+	private EditBox editToBox;
 	private EditBox editSaveBox;
+	private Suggestions fromSuggestions;
+	private Suggestions toSuggestions;
+	private Button editApplyButton;
+	private Button editRemoveButton;
+	private List<SchematicEdits.Entry> editEntries = List.of();
+	/** Ce que fera « Remplacer » avec les champs actuels (recalculé à chaque frappe). */
+	private EditPlan editPlan;
+	private boolean focusEditTo;
 	private String pendingEditOverwrite;
 
 	public SchemaScreen() {
@@ -125,6 +138,8 @@ public class SchemaScreen extends Screen {
 	protected void init() {
 		labels.clear();
 		editRows.clear();
+		fromSuggestions = null;
+		toSuggestions = null;
 		int x = cx();
 		int y0 = top();
 
@@ -315,7 +330,13 @@ public class SchemaScreen extends Screen {
 		addRenderableWidget(Button.builder(Component.literal(SchemaState.layerMode ? "Affichage : couche par couche" : "Affichage : tout le schéma"), b -> {
 			SchemaState.toggleLayerMode();
 			rebuildWidgets();
-		}).bounds(x, y, W, 20).build());
+		}).bounds(x, y, W - 104, 20).build());
+		Button visibility = addRenderableWidget(Button.builder(Component.literal(SchemaState.visible ? "§aVisible" : "§cMasqué"), b -> {
+			SchemaState.visible = !SchemaState.visible;
+			setStatus(SchemaState.visible ? "Schéma affiché." : "Schéma masqué (printer en pause).", SchemaState.visible ? 0xFF55FF55 : 0xFFFFAA00);
+			rebuildWidgets();
+		}).bounds(x + W - 100, y, 100, 20).build());
+		visibility.active = loaded;
 
 		y += ROW;
 		int half = (W - 4) / 2;
@@ -433,62 +454,62 @@ public class SchemaScreen extends Screen {
 
 	// ================================================================ Édition
 
+	private static final int EDIT_ROWS = 3;
+	private static final int GREEN = 0xFF55FF55;
+	private static final int RED = 0xFFFF5555;
+	private static final int ORANGE = 0xFFFFAA00;
+
+	/** Aperçu de ce que fera « Remplacer » avec les champs actuels. */
+	private record EditPlan(String text, int color, boolean ready) {}
+
+	/** Propositions du champ « par » : tous les blocs du jeu, et tous les mots de leurs noms. */
+	private static List<Suggestions.Item> allBlockItems;
+	private static List<Suggestions.Item> allWordItems;
+	/** Propositions du champ « Remplacer » : blocs du schéma puis mots de leurs noms. */
+	private List<Suggestions.Item> fromItems = List.of();
+	private int editPlanY;
+
 	private void initEdit(int x, int c) {
 		Schematic s = SchemaState.base;
 		if (s == null) {
 			label(() -> "Aucun schéma chargé (onglet Schémas)", x, c, GRAY, false);
 			label(() -> "Charge un schéma pour changer ses blocs :", x, c + 16, DARK, false);
-			label(() -> "remplacer, mélanger en %, supprimer.", x, c + 27, DARK, false);
+			label(() -> "remplacer, mélanger en %, retirer.", x, c + 27, DARK, false);
 			return;
 		}
 		if (!s.name().equals(editFor)) {
 			editFor = s.name();
-			editSelected = null;
 			editPage = 0;
-			editMix = "";
+			editFrom = "";
+			editTo = "";
 			editSaveName = "";
 		}
-		List<SchematicEdits.Entry> entries = SchematicEdits.entries(s);
-		if (editSelected != null && entries.stream().noneMatch(e -> e.block() == editSelected)) editSelected = null;
-		int pages = Math.max(1, (entries.size() + EDIT_PER_PAGE - 1) / EDIT_PER_PAGE);
+		editEntries = SchematicEdits.entries(s);
+		fromItems = fromCandidates(editEntries);
+		List<SchematicEdits.Entry> entries = editEntries;
+		int pages = Math.max(1, (entries.size() + EDIT_ROWS - 1) / EDIT_ROWS);
 		if (editPage >= pages) editPage = pages - 1;
-		label(() -> s.name() + " : " + s.nonAirCount() + " blocs, " + entries.size() + " types", x, c, 0xFF55FFFF, false);
+		label(() -> trim(s.name() + " : " + s.nonAirCount() + " blocs, " + entries.size() + " types (clic = choisir)", W),
+			x, c, 0xFF55FFFF, false);
 
-		// --- Remplacer un mot dans tous les noms (oak -> spruce) ---
+		// --- Blocs du schéma ---
 		int y = c + 12;
-		editFindBox = new EditBox(font, x, y, 92, 20, Component.literal("Mot"));
-		editFindBox.setMaxLength(40);
-		editFindBox.setHint(Component.literal("oak"));
-		editFindBox.setValue(editFind);
-		editFindBox.setResponder(v -> editFind = v);
-		addRenderableWidget(editFindBox);
-		label(() -> "→", x + 100, y + 6, WHITE, true);
-		editReplBox = new EditBox(font, x + 108, y, 92, 20, Component.literal("Remplacer par"));
-		editReplBox.setMaxLength(40);
-		editReplBox.setHint(Component.literal("spruce"));
-		editReplBox.setValue(editRepl);
-		editReplBox.setResponder(v -> editRepl = v);
-		addRenderableWidget(editReplBox);
-		addRenderableWidget(Button.builder(Component.literal("Remplacer"), b -> replaceWords())
-			.bounds(x + 204, y, W - 204, 20).build());
-
-		// --- Liste des blocs : clic = choisir celui à modifier ---
-		y += ROW + 2;
-		int start = editPage * EDIT_PER_PAGE;
-		for (int i = 0; i < EDIT_PER_PAGE && start + i < entries.size(); i++) {
+		Block current = BlockStates.block(editFrom);
+		int start = editPage * EDIT_ROWS;
+		for (int i = 0; i < EDIT_ROWS && start + i < entries.size(); i++) {
 			SchematicEdits.Entry e = entries.get(start + i);
 			int ry = y + i * ROW;
-			String text = trim(e.block().getName().getString(), 200) + "  x" + e.count();
-			boolean sel = e.block() == editSelected;
-			addRenderableWidget(Button.builder(Component.literal(sel ? "» " + text + " «" : text), b -> {
-				editSelected = e.block();
-				editMix = e.id();
+			String text = trim(e.block().getName().getString(), W - 90) + "  ×" + e.count();
+			addRenderableWidget(Button.builder(Component.literal(e.block() == current ? "§e" + text : text), b -> {
+				editFrom = e.id();
+				editTo = "";
+				focusEditTo = true;
 				rebuildWidgets();
 			}).bounds(x, ry, W, 20).build());
 			editRows.add(new EditRow(e, x, ry));
 		}
 
-		y += EDIT_PER_PAGE * ROW;
+		y += EDIT_ROWS * ROW;
 		Button prev = addRenderableWidget(Button.builder(Component.literal("<"), b -> {
 			editPage--;
 			rebuildWidgets();
@@ -501,34 +522,50 @@ public class SchemaScreen extends Screen {
 			rebuildWidgets();
 		}).bounds(x + 74, y, 24, 20).build());
 		next.active = editPage < pages - 1;
-		Button undo = addRenderableWidget(Button.builder(Component.literal("Annuler la modification"), b -> {
+		editRemoveButton = addRenderableWidget(Button.builder(Component.literal("Retirer le bloc"), b -> removeEditBlock())
+			.bounds(x + 102, y, 96, 20).build());
+		Button undo = addRenderableWidget(Button.builder(Component.literal("Annuler"), b -> {
 			SchemaState.undoEdit();
 			setStatus("Modification annulée.", WHITE);
 			rebuildWidgets();
-		}).bounds(x + 102, y, W - 102, 20).build());
+		}).bounds(x + 202, y, W - 202, 20).build());
 		undo.active = SchemaState.canUndoEdit();
 
-		// --- Bloc choisi : remplacer, mélanger, retirer ---
-		y += ROW + 2;
-		Block sel = editSelected;
-		label(() -> sel == null ? "Clique un bloc pour le remplacer ou le mélanger."
-			: "Remplacer " + trim(sel.getName().getString(), 150) + " par :  (ex. stone 60, andesite 40)", x, y, sel == null ? DARK : GRAY, false);
-		y += 12;
-		editMixBox = new EditBox(font, x, y, W - 132, 20, Component.literal("Nouveau bloc"));
-		editMixBox.setMaxLength(256);
-		editMixBox.setHint(Component.literal("spruce_planks"));
-		editMixBox.setValue(sel == null ? "" : editMix);
-		editMixBox.setResponder(v -> editMix = v);
-		editMixBox.setEditable(sel != null);
-		addRenderableWidget(editMixBox);
-		Button apply = addRenderableWidget(Button.builder(Component.literal("Appliquer"), b -> applyMix())
-			.bounds(x + W - 128, y, 64, 20).build());
-		Button remove = addRenderableWidget(Button.builder(Component.literal("Retirer"), b -> removeSelected())
-			.bounds(x + W - 62, y, 62, 20).build());
-		apply.active = remove.active = sel != null;
+		// --- Remplacer [bloc ou mot] par [bloc, mélange ou mot] ---
+		y += ROW + 3;
+		label(() -> "Remplacer", x, y + 6, WHITE, false);
+		editFromBox = new EditBox(font, x + 56, y, W - 56, 20, Component.literal("Remplacer"));
+		editFromBox.setMaxLength(100);
+		editFromBox.setHint(Component.literal("un bloc (oak_log) ou un mot (oak)"));
+		editFromBox.setValue(editFrom);
+		editFromBox.setResponder(v -> {
+			editFrom = v;
+			refreshEditPlan();
+		});
+		addRenderableWidget(editFromBox);
+		fromSuggestions = new Suggestions(editFromBox, font, this::fromCompletions);
+
+		y += ROW;
+		label(() -> "par", x + 56 - 6 - font.width("par"), y + 6, WHITE, false);
+		editToBox = new EditBox(font, x + 56, y, W - 56 - 74, 20, Component.literal("par"));
+		editToBox.setMaxLength(256);
+		editToBox.setHint(Component.literal("stone  /  stone 60, andesite 40"));
+		editToBox.setValue(editTo);
+		editToBox.setResponder(v -> {
+			editTo = v;
+			refreshEditPlan();
+		});
+		addRenderableWidget(editToBox);
+		toSuggestions = new Suggestions(editToBox, font, this::toCompletions);
+		editApplyButton = addRenderableWidget(Button.builder(Component.literal("Remplacer"), b -> applyEditPlan())
+			.bounds(x + W - 70, y, 70, 20).build());
+
+		// --- Aperçu (dessiné dans renderEdit) ---
+		y += ROW + 1;
+		editPlanY = y;
 
 		// --- Enregistrer la version modifiée ---
-		y += ROW + 2;
+		y += 13;
 		editSaveBox = new EditBox(font, x, y, 170, 20, Component.literal("Nom"));
 		editSaveBox.setMaxLength(64);
 		editSaveBox.setHint(Component.literal("nom du schéma modifié"));
@@ -540,6 +577,12 @@ public class SchemaScreen extends Screen {
 		addRenderableWidget(editSaveBox);
 		addRenderableWidget(Button.builder(Component.literal("Enregistrer sous"), b -> saveEdited())
 			.bounds(x + 174, y, W - 174, 20).build());
+
+		refreshEditPlan();
+		if (focusEditTo) {
+			focusEditTo = false;
+			setFocused(editToBox);
+		}
 	}
 
 	private void renderEdit(GuiGraphicsExtractor g) {
@@ -547,64 +590,96 @@ public class SchemaScreen extends Screen {
 			ItemStack stack = new ItemStack(r.entry().block().asItem());
 			if (!stack.isEmpty()) g.item(stack, r.x() + 2, r.y() + 2);
 		}
+		if (editPlan != null && SchemaState.base != null) {
+			g.text(font, trim(editPlan.text(), W), cx(), editPlanY, editPlan.color(), true);
+		}
 	}
 
-	private void replaceWords() {
+	/** Le bloc s'il est présent dans le schéma, sinon null (le texte est alors traité comme un mot). */
+	private Block blockInSchema(String id) {
+		Block b = BlockStates.block(id);
+		return b != null && SchematicEdits.count(editEntries, b) > 0 ? b : null;
+	}
+
+	private void refreshEditPlan() {
+		editPlan = computeEditPlan();
+		if (editApplyButton != null) editApplyButton.active = editPlan.ready();
+		if (editRemoveButton != null) editRemoveButton.active = blockInSchema(editFrom) != null;
+	}
+
+	private EditPlan computeEditPlan() {
+		Schematic s = SchemaState.base;
+		String from = BlockStates.normalize(editFrom);
+		String to = editTo.trim();
+		if (s == null) return new EditPlan("", GRAY, false);
+		if (from.isEmpty()) return new EditPlan("Choisis un bloc dans la liste, ou écris un mot (ex. oak).", DARK, false);
+
+		// Un bloc du schéma -> un bloc ou un mélange
+		Block block = blockInSchema(from);
+		if (block != null) {
+			int n = SchematicEdits.count(editEntries, block);
+			if (to.isEmpty()) return new EditPlan(n + " × " + from + " → écris le nouveau bloc (Tab complète)", GRAY, false);
+			try {
+				List<SchematicEdits.MixPart> parts = SchematicEdits.parseMix(to);
+				return new EditPlan(n + " × " + from + " → " + SchematicEdits.describe(parts), GREEN, true);
+			} catch (IllegalArgumentException e) {
+				return new EditPlan(e.getMessage(), RED, false);
+			}
+		}
+
+		// Sinon, un mot dans les noms (oak -> spruce)
+		if (BlockStates.exists(from) && SchematicEdits.typesWithWord(editEntries, from) == 0) {
+			return new EditPlan("Il n'y a pas de " + from + " dans ce schéma.", RED, false);
+		}
+		if (!from.matches("[a-z0-9_]+")) return new EditPlan("« " + from + " » n'est pas un bloc du schéma.", RED, false);
+		int types = SchematicEdits.typesWithWord(editEntries, from);
+		if (types == 0) return new EditPlan("Aucun bloc du schéma ne contient le mot « " + from + " ».", RED, false);
+		if (to.isEmpty()) return new EditPlan("Mot « " + from + " » (" + types + " types) → écris le mot qui le remplace (ex. spruce)", GRAY, false);
+		String repl = BlockStates.normalize(to);
+		if (!repl.matches("[a-z0-9_]+")) return new EditPlan("Un mot se remplace par un seul mot (ex. oak → spruce).", RED, false);
+		SchematicEdits.WordResult r = SchematicEdits.replaceWords(s, from, repl);
+		if (r.replaced() == 0) {
+			return new EditPlan(r.skipped().isEmpty() ? "Rien ne change." : "Rien à remplacer : " + r.skipped().get(0) + " n'existe pas.", RED, false);
+		}
+		String text = "« " + from + " » → « " + repl + " » : " + r.replaced() + " blocs, " + r.changes().size() + " types";
+		if (!r.skipped().isEmpty()) text += " (" + r.skipped().size() + " ignorés)";
+		return new EditPlan(text, r.skipped().isEmpty() ? GREEN : ORANGE, true);
+	}
+
+	private void applyEditPlan() {
+		refreshEditPlan();
 		Schematic s = SchemaState.base;
 		if (s == null) return;
-		String find = SchematicEdits.normalize(editFind);
-		if (find.isEmpty()) {
-			setStatus("Écris le mot à remplacer, ex. oak.", 0xFFFF5555);
+		if (!editPlan.ready()) {
+			setStatus(editPlan.text(), RED);
 			return;
 		}
-		SchematicEdits.WordResult r = SchematicEdits.replaceWords(s, find, editRepl);
-		if (r.replaced() == 0) {
-			setStatus(r.skipped().isEmpty() ? "Aucun bloc ne contient « " + find + " »."
-				: "Rien de remplacé : " + r.skipped().get(0) + " n'existe pas.", 0xFFFF5555);
-			return;
-		}
-		SchemaState.applyEdit(r.schematic());
-		String msg = r.replaced() + " blocs remplacés (" + r.changes().size() + " types)";
-		if (!r.skipped().isEmpty()) msg += ", ignoré car inexistant : " + String.join(", ", r.skipped());
-		setStatus(trim(msg, width - 20), r.skipped().isEmpty() ? 0xFF55FF55 : 0xFFFFAA00);
-		rebuildWidgets();
-	}
-
-	private void applyMix() {
-		Schematic s = SchemaState.base;
-		if (s == null || editSelected == null) return;
-		List<SchematicEdits.MixPart> parts;
-		try {
-			parts = SchematicEdits.parseMix(editMix);
-		} catch (IllegalArgumentException e) {
-			setStatus(e.getMessage() + ".", 0xFFFF5555);
-			return;
-		}
-		String from = editSelected.getName().getString();
-		SchemaState.applyEdit(SchematicEdits.mix(s, editSelected, parts, RANDOM));
-		if (parts.size() == 1) {
-			setStatus(from + " → " + parts.get(0).id() + ".", 0xFF55FF55);
+		String from = BlockStates.normalize(editFrom);
+		Block block = blockInSchema(from);
+		if (block != null) {
+			SchemaState.applyEdit(SchematicEdits.mix(s, block, SchematicEdits.parseMix(editTo), RANDOM));
+			setStatus(trim(editPlan.text(), width - 20), GREEN);
 		} else {
-			int total = 0;
-			for (SchematicEdits.MixPart p : parts) total += p.weight();
-			StringBuilder sb = new StringBuilder(from + " → ");
-			for (int i = 0; i < parts.size(); i++) {
-				if (i > 0) sb.append(", ");
-				sb.append(parts.get(i).id()).append(' ').append(Math.round(100.0 * parts.get(i).weight() / total)).append('%');
-			}
-			setStatus(trim(sb.toString(), width - 20), 0xFF55FF55);
+			SchematicEdits.WordResult r = SchematicEdits.replaceWords(s, from, editTo);
+			SchemaState.applyEdit(r.schematic());
+			String msg = r.replaced() + " blocs : " + String.join(", ", r.changes());
+			if (!r.skipped().isEmpty()) msg += " | ignorés (n'existent pas) : " + String.join(", ", r.skipped());
+			setStatus(trim(msg, width - 20), r.skipped().isEmpty() ? GREEN : ORANGE);
 		}
-		editSelected = null;
+		editFrom = "";
+		editTo = "";
 		rebuildWidgets();
 	}
 
-	private void removeSelected() {
+	private void removeEditBlock() {
 		Schematic s = SchemaState.base;
-		if (s == null || editSelected == null) return;
-		String from = editSelected.getName().getString();
-		SchemaState.applyEdit(SchematicEdits.remove(s, editSelected));
-		setStatus(from + " retiré du schéma.", 0xFF55FF55);
-		editSelected = null;
+		Block block = blockInSchema(editFrom);
+		if (s == null || block == null) return;
+		int n = SchematicEdits.count(editEntries, block);
+		SchemaState.applyEdit(SchematicEdits.remove(s, block));
+		setStatus(n + " × " + BlockStates.idOf(block) + " retirés du schéma.", GREEN);
+		editFrom = "";
+		editTo = "";
 		rebuildWidgets();
 	}
 
@@ -613,22 +688,77 @@ public class SchemaScreen extends Screen {
 		if (s == null) return;
 		String name = SchemaFiles.sanitize(editSaveBox.getValue());
 		if (name.isEmpty()) {
-			setStatus("Donne un nom au schéma.", 0xFFFF5555);
+			setStatus("Donne un nom au schéma.", RED);
 			return;
 		}
 		if (SchemaFiles.exists(name) && !name.equals(pendingEditOverwrite)) {
 			pendingEditOverwrite = name;
-			setStatus("« " + name + " » existe déjà : clique encore pour l'écraser.", 0xFFFFAA00);
+			setStatus("« " + name + " » existe déjà : clique encore pour l'écraser.", ORANGE);
 			return;
 		}
 		pendingEditOverwrite = null;
 		try {
 			SchemaFiles.save(s.renamed(name));
 			loadedEntry = name;
-			setStatus("Enregistré : schemas/" + name + SchemaFiles.EXTENSION, 0xFF55FF55);
+			setStatus("Enregistré : schemas/" + name + SchemaFiles.EXTENSION, GREEN);
 		} catch (IOException | RuntimeException e) {
-			setStatus("Erreur d'enregistrement : " + e.getMessage(), 0xFFFF5555);
+			setStatus("Erreur d'enregistrement : " + e.getMessage(), RED);
 		}
+	}
+
+	// --- Autocomplétion ---
+
+	/** Blocs du schéma (avec leur nombre), puis les mots de leurs noms. */
+	private static List<Suggestions.Item> fromCandidates(List<SchematicEdits.Entry> entries) {
+		List<Suggestions.Item> items = new ArrayList<>();
+		java.util.Set<String> ids = new java.util.HashSet<>();
+		Map<String, Integer> words = new TreeMap<>();
+		for (SchematicEdits.Entry e : entries) {
+			items.add(new Suggestions.Item(e.id(), "×" + e.count()));
+			ids.add(e.id());
+			String path = e.id().substring(e.id().indexOf(':') + 1);
+			for (String w : new java.util.LinkedHashSet<>(List.of(path.split("_")))) words.merge(w, 1, Integer::sum);
+		}
+		words.forEach((w, n) -> {
+			if (!ids.contains(w)) items.add(new Suggestions.Item(w, "mot · " + n + (n > 1 ? " types" : " type")));
+		});
+		return items;
+	}
+
+	private Suggestions.Result fromCompletions(String value, int cursor) {
+		String typed = value.substring(0, cursor).trim();
+		return new Suggestions.Result(0, value.length(), Suggestions.filter(fromItems, typed, 300));
+	}
+
+	/** Complète le bloc en cours de frappe (après la dernière virgule), pas le pourcentage. */
+	private Suggestions.Result toCompletions(String value, int cursor) {
+		int start = 0;
+		for (int i = cursor - 1; i >= 0; i--) {
+			if (",;+".indexOf(value.charAt(i)) >= 0) {
+				start = i + 1;
+				break;
+			}
+		}
+		while (start < cursor && value.charAt(start) == ' ') start++;
+		String typed = value.substring(start, cursor);
+		if (typed.isEmpty() || typed.contains(" ")) return Suggestions.Result.NONE;
+		int end = cursor;
+		while (end < value.length() && " ,;+".indexOf(value.charAt(end)) < 0) end++;
+
+		boolean wordMode = blockInSchema(editFrom) == null;
+		if (allBlockItems == null) {
+			List<Suggestions.Item> blocks = new ArrayList<>();
+			java.util.Set<String> words = new java.util.TreeSet<>();
+			for (String id : BlockStates.allIds()) {
+				blocks.add(new Suggestions.Item(id, id.equals("air") ? "= retirer" : ""));
+				for (String w : id.substring(id.indexOf(':') + 1).split("_")) words.add(w);
+			}
+			List<Suggestions.Item> wordItems = new ArrayList<>();
+			for (String w : words) wordItems.add(new Suggestions.Item(w, ""));
+			allBlockItems = blocks;
+			allWordItems = wordItems;
+		}
+		return new Suggestions.Result(start, end, Suggestions.filter(wordMode ? allWordItems : allBlockItems, typed, 300));
 	}
 
 	// ================================================================ Paramètres
@@ -808,6 +938,35 @@ public class SchemaScreen extends Screen {
 		if (!status.isEmpty()) {
 			g.text(font, status, width / 2 - font.width(status) / 2, height - 12, statusColor, true);
 		}
+		// Listes d'autocomplétion en dernier : par-dessus tout le reste.
+		if (fromSuggestions != null) fromSuggestions.render(g, mouseX, mouseY, width, height);
+		if (toSuggestions != null) toSuggestions.render(g, mouseX, mouseY, width, height);
+	}
+
+	@Override
+	public boolean keyPressed(KeyEvent e) {
+		if (fromSuggestions != null && fromSuggestions.keyPressed(e)) return true;
+		if (toSuggestions != null && toSuggestions.keyPressed(e)) return true;
+		boolean enter = e.key() == InputConstants.KEY_RETURN || e.key() == InputConstants.KEY_NUMPADENTER;
+		if (enter && tab == Tab.EDIT && (getFocused() == editToBox || getFocused() == editFromBox)) {
+			applyEditPlan();
+			return true;
+		}
+		return super.keyPressed(e);
+	}
+
+	@Override
+	public boolean mouseClicked(MouseButtonEvent e, boolean doubleClick) {
+		if (fromSuggestions != null && fromSuggestions.mouseClicked(e.x(), e.y())) return true;
+		if (toSuggestions != null && toSuggestions.mouseClicked(e.x(), e.y())) return true;
+		return super.mouseClicked(e, doubleClick);
+	}
+
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		if (fromSuggestions != null && fromSuggestions.mouseScrolled(mouseX, mouseY, scrollY)) return true;
+		if (toSuggestions != null && toSuggestions.mouseScrolled(mouseX, mouseY, scrollY)) return true;
+		return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
 	}
 
 	@Override

@@ -7,12 +7,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
-import net.minecraft.nbt.NbtUtils;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -117,7 +115,7 @@ public final class LitematicReader {
 		List<BlockState> palette = new ArrayList<>(paletteTag.size());
 		for (int i = 0; i < paletteTag.size(); i++) {
 			// Bloc inconnu dans cette version -> air.
-			palette.add(NbtUtils.readBlockState(BuiltInRegistries.BLOCK, paletteTag.getCompoundOrEmpty(i)));
+			palette.add(BlockStates.fromNbt(paletteTag.getCompoundOrEmpty(i)));
 		}
 		if (palette.isEmpty()) return null;
 

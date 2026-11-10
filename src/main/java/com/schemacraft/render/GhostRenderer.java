@@ -101,7 +101,7 @@ public final class GhostRenderer {
 		float lineWidth = ctx.gameRenderer().gameRenderState().windowRenderState.appropriateLineWidth;
 
 		// --- Hologramme ---
-		if (SchemaState.isPlaced()) {
+		if (SchemaState.isPlaced() && SchemaState.visible) {
 			if (dirty) rebuild(mc.level);
 
 			BlockPos o = SchemaState.origin;
@@ -129,7 +129,8 @@ public final class GhostRenderer {
 		}
 
 		// --- Lignes (sélection, cadre du schéma, erreurs) ---
-		final boolean hasLines = SchemaState.pos1 != null || SchemaState.pos2 != null || SchemaState.isPlaced();
+		final boolean shown = SchemaState.visible;
+		final boolean hasLines = SchemaState.pos1 != null || SchemaState.pos2 != null || (SchemaState.isPlaced() && shown);
 		if (!hasLines) return;
 
 		final BlockPos p1 = SchemaState.pos1;
@@ -153,7 +154,7 @@ public final class GhostRenderer {
 			if (p1 != null) blockBox(vc, pose, p1, cx, cy, cz, 0.02, COLOR_POS1, lineWidth * 1.5f);
 			if (p2 != null) blockBox(vc, pose, p2, cx, cy, cz, 0.02, COLOR_POS2, lineWidth * 1.5f);
 
-			if (schem != null && origin != null) {
+			if (schem != null && origin != null && shown) {
 				double x0 = origin.getX() - cx, y0 = origin.getY() - cy, z0 = origin.getZ() - cz;
 				box(vc, pose, x0, y0, z0, x0 + schem.sizeX(), y0 + schem.sizeY(), z0 + schem.sizeZ(), COLOR_PLACEMENT, lineWidth);
 				if (layerMode) {
