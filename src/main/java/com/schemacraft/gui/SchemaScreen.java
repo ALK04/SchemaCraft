@@ -12,6 +12,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.schemacraft.SchemaCraftClient;
 import com.schemacraft.SchemaState;
 import com.schemacraft.Settings;
+import com.schemacraft.paste.Paster;
 import com.schemacraft.schematic.BlockStates;
 import com.schemacraft.schematic.Materials;
 import com.schemacraft.schematic.SchemaFiles;
@@ -802,6 +803,22 @@ public class SchemaScreen extends Screen {
 		y += ROW + 4;
 		label(() -> "Prend les blocs de ton inventaire.", x, y, DARK, false);
 		label(() -> "En créatif, les blocs sont créés.", x, y + 11, DARK, false);
+
+		// Collage (épée en bois en mode Coller, shift + molette pour changer de mode)
+		y += 28;
+		label(() -> "Collage : épée en mode Coller (shift + molette)", x, y, GRAY, false);
+		y += 12;
+		int half = (W - 4) / 2;
+		addRenderableWidget(Button.builder(Component.literal("L'air " + (Settings.pasteReplaceAir ? "§cefface" : "§an'efface pas")), b -> {
+			Settings.pasteReplaceAir = !Settings.pasteReplaceAir;
+			Settings.save();
+			rebuildWidgets();
+		}).bounds(x, y, half, 20).build());
+		Button undo = addRenderableWidget(Button.builder(Component.literal("Annuler le collage"), b -> {
+			Paster.undo();
+			onClose();
+		}).bounds(x + half + 4, y, half, 20).build());
+		undo.active = Paster.canUndo();
 	}
 
 	/** Ligne "Libellé      [-] valeur [+]". */

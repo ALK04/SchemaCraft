@@ -2,11 +2,13 @@ package com.schemacraft;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.schemacraft.gui.SchemaScreen;
+import com.schemacraft.paste.Paster;
 import com.schemacraft.render.GhostRenderer;
 
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
@@ -41,6 +43,7 @@ public final class SchemaCraftClient implements ClientModInitializer {
 	private static KeyMapping layerUpKey;
 	private static KeyMapping layerDownKey;
 	private static KeyMapping resourcesKey;
+	private static KeyMapping undoPasteKey;
 
 	@Override
 	public void onInitializeClient() {
@@ -57,10 +60,14 @@ public final class SchemaCraftClient implements ClientModInitializer {
 		// Touche ")" sur un clavier AZERTY (même position physique que "-" en QWERTY).
 		resourcesKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
 			"key.schemacraft.resources", InputConstants.Type.KEYBOARD, InputConstants.KEY_MINUS, category));
+		// Avec Ctrl : Ctrl+Z sur un clavier AZERTY (même position physique que W en QWERTY).
+		undoPasteKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+			"key.schemacraft.undo_paste", InputConstants.Type.KEYBOARD, InputConstants.KEY_W, category));
 
 		ClientTickEvents.END_CLIENT_TICK.register(SchemaCraftClient::onTick);
 		UseBlockCallback.EVENT.register(SchemaCraftClient::onUseBlock);
 		UseItemCallback.EVENT.register(SchemaCraftClient::onUseItem);
+		ClientHotbarScrollEvents.ALLOW.register((inventory, oldSlot, newSlot, scrollX, scrollY) -> !onHotbarScroll());
 		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::collectSubmits);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "info"), (g, delta) -> renderHud(g));
 	}
@@ -71,6 +78,7 @@ public final class SchemaCraftClient implements ClientModInitializer {
 		GhostRenderer.tick();
 		if (mc.player == null) return;
 		com.schemacraft.printer.Printer.tick(mc);
+		Paster.tick(mc);
 
 		while (openMenuKey.consumeClick()) {
 			mc.setScreenAndShow(new SchemaScreen());
@@ -92,6 +100,26 @@ public final class SchemaCraftClient implements ClientModInitializer {
 		while (layerDownKey.consumeClick()) {
 			if (SchemaState.layerMode) SchemaState.changeLayer(-1);
 		}
+		while (undoPasteKey.consumeClick()) {
+			// Seulement Ctrl + touche, épée en main : la même touche sert aussi à avancer.
+			boolean ctrl = InputConstants.isKeyDown(InputConstants.KEY_LCONTROL) || InputConstants.isKeyDown(InputConstants.KEY_RCONTROL);
+			if (ctrl && mc.player.getMainHandItem().getItem() == PLACEMENT_TOOL) Paster.undo();
+		}
+	}
+
+	/** Shift + molette avec l'épée en bois : change de mode au lieu de changer d'objet. */
+	private static boolean onHotbarScroll() {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.player == null || !mc.options.keyShift.isDown()) return false;
+		if (mc.player.getMainHandItem().getItem() != PLACEMENT_TOOL) return false;
+		SchemaState.pasteMode = !SchemaState.pasteMode;
+		if (SchemaState.pasteMode) {
+			String warn = Paster.allowed(mc.player) ? "" : "  (créatif + op requis)";
+			message(Component.literal("Épée : mode Coller — clic droit = coller le schéma" + warn).withStyle(ChatFormatting.GOLD));
+		} else {
+			message(Component.literal("Épée : mode Placer — clic droit = poser l'hologramme").withStyle(ChatFormatting.AQUA));
+		}
+		return true;
 	}
 
 	// ------------------------------------------------------------------ clics
@@ -106,6 +134,11 @@ public final class SchemaCraftClient implements ClientModInitializer {
 		Item item = player.getMainHandItem().getItem();
 		if (item != SELECTION_TOOL && item != PLACEMENT_TOOL) return InteractionResult.PASS;
 		if (item == PLACEMENT_TOOL && SchemaState.loaded == null) return InteractionResult.PASS;
+		// Mode Coller avec un hologramme déjà posé : pas besoin de viser un bloc.
+		if (item == PLACEMENT_TOOL && SchemaState.pasteMode && SchemaState.isPlaced()) {
+			Paster.paste();
+			return InteractionResult.FAIL;
+		}
 
 		// On vise dans le vide (bloc hors de portée) : on cherche plus loin.
 		HitResult far = player.pick(FAR_REACH, 1.0f, false);
@@ -131,6 +164,12 @@ public final class SchemaCraftClient implements ClientModInitializer {
 				SchemaState.pos1 = pos;
 				message(Component.literal("Position 1 : " + fmt(pos) + sizeSuffix()).withStyle(ChatFormatting.RED));
 			}
+			return InteractionResult.FAIL;
+		}
+		if (item == PLACEMENT_TOOL && SchemaState.loaded != null && SchemaState.pasteMode) {
+			// Colle là où est l'hologramme ; s'il n'est pas encore posé, on le pose d'abord sur la face cliquée.
+			if (!SchemaState.isPlaced()) SchemaState.setOrigin(hit.getBlockPos().relative(hit.getDirection()));
+			Paster.paste();
 			return InteractionResult.FAIL;
 		}
 		if (item == PLACEMENT_TOOL && SchemaState.loaded != null) {
@@ -164,6 +203,16 @@ public final class SchemaCraftClient implements ClientModInitializer {
 		if (held == SELECTION_TOOL) {
 			g.text(mc.font, "Sélection  P1: " + (SchemaState.pos1 == null ? "-" : fmt(SchemaState.pos1))
 				+ "  P2: " + (SchemaState.pos2 == null ? "-" : fmt(SchemaState.pos2)) + sizeSuffix(), x, y, 0xFFFFFFFF, true);
+			y += line;
+		}
+		if (held == PLACEMENT_TOOL) {
+			g.text(mc.font, "Épée : " + (SchemaState.pasteMode ? "Coller" : "Placer") + "  [Shift + molette]",
+				x, y, SchemaState.pasteMode ? 0xFFFFAA00 : 0xFF55FFFF, true);
+			y += line;
+		}
+		String progress = Paster.progressText();
+		if (progress != null) {
+			g.text(mc.font, progress, x, y, 0xFF55FF55, true);
 			y += line;
 		}
 		if (SchemaState.loaded != null) {
