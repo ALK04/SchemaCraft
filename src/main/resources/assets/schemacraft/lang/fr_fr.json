@@ -4,5 +4,6 @@
   "key.schemacraft.layer_mode": "Basculer tout / couche par couche",
   "key.schemacraft.layer_up": "Couche suivante (monter)",
   "key.schemacraft.layer_down": "Couche précédente (descendre)",
-  "key.schemacraft.resources": "Ressources à avoir"
+  "key.schemacraft.resources": "Ressources à avoir",
+  "key.schemacraft.undo_paste": "Annuler le dernier collage (avec Ctrl, épée en main)"
 }

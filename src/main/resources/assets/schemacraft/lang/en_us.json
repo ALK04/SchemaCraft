@@ -4,5 +4,6 @@
   "key.schemacraft.layer_mode": "Toggle all / layer by layer",
   "key.schemacraft.layer_up": "Next layer (up)",
   "key.schemacraft.layer_down": "Previous layer (down)",
-  "key.schemacraft.resources": "Required materials"
+  "key.schemacraft.resources": "Required materials",
+  "key.schemacraft.undo_paste": "Undo last paste (with Ctrl, wooden sword in hand)"
 }

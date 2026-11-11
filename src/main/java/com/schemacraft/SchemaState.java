@@ -16,6 +16,8 @@ public final class SchemaState {
 	public static BlockPos pos2;
 
 	// --- Placement (épée en bois) ---
+	/** Mode de l'épée en bois (shift + molette) : false = Placer l'hologramme, true = Coller. */
+	public static boolean pasteMode;
 	public static Schematic loaded;
 	/** Coin minimum du schéma placé dans le monde, null = pas encore posé. */
 	public static BlockPos origin;

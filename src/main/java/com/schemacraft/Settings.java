@@ -24,6 +24,8 @@ public final class Settings {
 	public static double printerRange = 4.5;
 	/** En mode couche par couche, n'imprimer que la couche affichée. */
 	public static boolean printerOnlyVisibleLayer = true;
+	/** Collage : l'air du schéma efface aussi les blocs du monde (sinon il est ignoré). */
+	public static boolean pasteReplaceAir = false;
 
 	public static final int DELAY_MIN = 0, DELAY_MAX = 20;
 	public static final int BLOCKS_MIN = 1, BLOCKS_MAX = 8;
@@ -47,6 +49,7 @@ public final class Settings {
 		printerBlocksPerAction = clamp(parseInt(p.getProperty("printer.blocksPerAction"), printerBlocksPerAction), BLOCKS_MIN, BLOCKS_MAX);
 		printerRange = Math.max(RANGE_MIN, Math.min(RANGE_MAX, parseDouble(p.getProperty("printer.range"), printerRange)));
 		printerOnlyVisibleLayer = Boolean.parseBoolean(p.getProperty("printer.onlyVisibleLayer", String.valueOf(printerOnlyVisibleLayer)));
+		pasteReplaceAir = Boolean.parseBoolean(p.getProperty("paste.replaceAir", String.valueOf(pasteReplaceAir)));
 	}
 
 	public static void save() {
@@ -56,6 +59,7 @@ public final class Settings {
 		p.setProperty("printer.blocksPerAction", String.valueOf(printerBlocksPerAction));
 		p.setProperty("printer.range", String.valueOf(printerRange));
 		p.setProperty("printer.onlyVisibleLayer", String.valueOf(printerOnlyVisibleLayer));
+		p.setProperty("paste.replaceAir", String.valueOf(pasteReplaceAir));
 		try {
 			Files.createDirectories(file().getParent());
 			try (Writer w = Files.newBufferedWriter(file(), StandardCharsets.UTF_8)) {
