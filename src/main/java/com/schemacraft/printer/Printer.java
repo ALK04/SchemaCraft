@@ -18,6 +18,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Inventory;
@@ -27,6 +28,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.block.ObserverBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BedPart;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -44,8 +46,13 @@ import net.minecraft.world.phys.Vec3;
  * Pour trouver comment poser un bloc dans le bon état (orientation, demi-dalle, axe...),
  * on simule le placement vanilla (BlockItem#getPlacementState) avec plusieurs faces
  * cliquées, hauteurs de clic et rotations du joueur, et on garde la combinaison
- * qui donne l'état le plus proche de celui du schéma. Si une rotation est nécessaire,
- * on l'envoie au serveur juste avant le clic puis on remet la vraie rotation.
+ * qui donne l'état le plus proche de celui du schéma.
+ *
+ * Si une rotation est nécessaire, on l'envoie au serveur et on ne clique qu'au tick suivant :
+ * les pistons, observateurs, distributeurs... s'orientent d'après la rotation de la TÊTE
+ * du joueur côté serveur (getNearestLookingDirection -> yHeadRot), que le serveur ne recopie
+ * qu'à son propre tick (Player#aiStep). Rotation et clic dans le même tick = bloc orienté
+ * selon l'endroit où le joueur regarde vraiment.
  */
 public final class Printer {
 	private Printer() {}
@@ -59,18 +66,26 @@ public final class Printer {
 	private static final int RETRY_PLACED = 20;
 	private static final int RETRY_NO_ITEM = 40;
 	private static final int RETRY_IMPOSSIBLE = 100;
+	/** Au-delà, une rotation envoyée est considérée comme périmée (menu ouvert, printer coupé...). */
+	private static final int PENDING_TIMEOUT = 5;
 
 	private static final Map<Long, Integer> retryAt = new HashMap<>();
 	private static int tickCount;
 	private static int cooldown;
+	/** Placement dont la rotation a déjà été envoyée au serveur, à cliquer au tick suivant. */
+	private static Pending pending;
 
 	private static Method placementStateMethod;
 	private static boolean reflectionTried;
 
 	/** Plan de placement trouvé par simulation. rotate=false = pas besoin de tourner. */
-	private record Plan(BlockHitResult hit, boolean rotate, float yaw, float pitch) {}
+	private record Plan(BlockHitResult hit, boolean rotate, float yaw, float pitch, int score) {}
+
+	private record Pending(BlockPos pos, BlockState want, Plan plan, int sentTick) {}
 
 	private record Candidate(BlockPos pos, BlockState state, double dist) {}
+
+	private enum Outcome { PLACED, ROTATING, SKIPPED }
 
 	public static void tick(Minecraft mc) {
 		tickCount++;
@@ -79,6 +94,18 @@ public final class Printer {
 		ClientLevel level = mc.level;
 		if (player == null || level == null || mc.gameMode == null || mc.gui.screen() != null) return;
 		if (player.isSpectator()) return;
+
+		// Rotation envoyée au tick précédent : le serveur l'a appliquée à la tête, on peut cliquer.
+		if (pending != null) {
+			Pending p = pending;
+			pending = null;
+			if (tickCount - p.sentTick() <= PENDING_TIMEOUT && placePending(mc, player, level, p)) {
+				cooldown = Settings.printerDelay;
+				GhostRenderer.markDirty();
+			}
+			return;
+		}
+
 		if (cooldown > 0) {
 			cooldown--;
 			return;
@@ -87,7 +114,9 @@ public final class Printer {
 
 		int placed = 0;
 		for (Candidate c : collectCandidates(player, level)) {
-			if (tryPlace(mc, player, level, c.pos(), c.state())) {
+			Outcome outcome = tryPlace(mc, player, level, c.pos(), c.state());
+			if (outcome == Outcome.ROTATING) break;
+			if (outcome == Outcome.PLACED) {
 				placed++;
 				if (placed >= Settings.printerBlocksPerAction) break;
 			}
@@ -138,6 +167,7 @@ public final class Printer {
 					if (world == want) continue;
 					if (!world.canBeReplaced() && !canCompleteSlab(world, want)) continue;
 					if (!want.getCollisionShape(level, pos).isEmpty() && playerBox.intersects(new AABB(pos))) continue;
+					if (waitsForObservedBlock(player, level, pos, want)) continue;
 
 					out.add(new Candidate(pos, want, d2));
 				}
@@ -164,32 +194,113 @@ public final class Printer {
 			&& world.getValue(BlockStateProperties.SLAB_TYPE) != SlabType.DOUBLE;
 	}
 
+	/**
+	 * Un observateur posé avant le bloc qu'il surveille voit ce bloc apparaître et envoie une
+	 * impulsion : les pistons de la machine se déclenchent en pleine construction. On attend donc
+	 * que le bloc surveillé soit en place (s'il fait partie du schéma et que le printer peut le poser).
+	 */
+	private static boolean waitsForObservedBlock(LocalPlayer player, ClientLevel level, BlockPos pos, BlockState want) {
+		if (!(want.getBlock() instanceof ObserverBlock)) return false;
+		Direction facing = want.getValue(ObserverBlock.FACING);
+		BlockPos target = pos.relative(facing);
+		BlockState targetWant = wantedAt(target);
+		if (targetWant == null || targetWant.isAir() || level.getBlockState(target) == targetWant) return false;
+		// Tête de piston, piston en mouvement... : jamais posés par le printer, inutile d'attendre.
+		Item item = targetWant.getBlock().asItem();
+		if (item == Items.AIR || !(item instanceof BlockItem) || !hasItem(player, item)) return false;
+		// Deux observateurs face à face (horloge) : un seul des deux attend l'autre.
+		if (targetWant.getBlock() instanceof ObserverBlock && targetWant.getValue(ObserverBlock.FACING) == facing.getOpposite()) {
+			return pos.asLong() > target.asLong();
+		}
+		return true;
+	}
+
+	/** État voulu par le schéma à cette position du monde, ou null hors du schéma. */
+	private static BlockState wantedAt(BlockPos pos) {
+		Schematic s = SchemaState.loaded;
+		BlockPos o = SchemaState.origin;
+		if (s == null || o == null) return null;
+		int x = pos.getX() - o.getX(), y = pos.getY() - o.getY(), z = pos.getZ() - o.getZ();
+		if (x < 0 || y < 0 || z < 0 || x >= s.sizeX() || y >= s.sizeY() || z >= s.sizeZ()) return null;
+		return s.get(x, y, z);
+	}
+
+	private static boolean hasItem(LocalPlayer player, Item item) {
+		if (player.hasInfiniteMaterials()) return true;
+		Inventory inv = player.getInventory();
+		for (int i = 0; i < 36; i++) {
+			if (inv.getItem(i).getItem() == item) return true;
+		}
+		return false;
+	}
+
 	// ------------------------------------------------------------- placement
 
-	private static boolean tryPlace(Minecraft mc, LocalPlayer player, ClientLevel level, BlockPos pos, BlockState want) {
+	private static Outcome tryPlace(Minecraft mc, LocalPlayer player, ClientLevel level, BlockPos pos, BlockState want) {
 		Item item = want.getBlock().asItem();
 		if (item == Items.AIR || !(item instanceof BlockItem)) {
 			retryAt.put(pos.asLong(), tickCount + RETRY_IMPOSSIBLE);
-			return false;
+			return Outcome.SKIPPED;
 		}
 
 		int slot = ensureInHotbar(mc, player, item);
 		if (slot < 0) {
 			retryAt.put(pos.asLong(), tickCount + RETRY_NO_ITEM);
-			return false;
+			return Outcome.SKIPPED;
 		}
 		ItemStack stack = player.getInventory().getItem(slot);
 		if (stack.getItem() != item) {
 			// Échange d'inventaire envoyé, l'objet arrive au prochain tick.
-			return false;
+			return Outcome.SKIPPED;
 		}
 
 		Plan plan = findPlan(player, level, pos, want, stack);
 		if (plan == null) {
 			retryAt.put(pos.asLong(), tickCount + RETRY_IMPOSSIBLE);
-			return false;
+			return Outcome.SKIPPED;
 		}
 
+		retryAt.put(pos.asLong(), tickCount + RETRY_PLACED);
+		if (plan.rotate()) {
+			// On tourne la tête côté serveur maintenant, le clic partira au prochain tick.
+			mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(plan.yaw(), plan.pitch(), player.onGround(), player.horizontalCollision));
+			pending = new Pending(pos, want, plan, tickCount);
+			return Outcome.ROTATING;
+		}
+		return click(mc, player, slot, stack, plan) ? Outcome.PLACED : Outcome.SKIPPED;
+	}
+
+	/** Second temps d'un placement avec rotation : on revérifie que tout est toujours valable, puis on clique. */
+	private static boolean placePending(Minecraft mc, LocalPlayer player, ClientLevel level, Pending p) {
+		BlockPos pos = p.pos();
+		BlockState want = p.want();
+		if (wantedAt(pos) != want) return false;
+		BlockState world = level.getBlockState(pos);
+		if (world == want || (!world.canBeReplaced() && !canCompleteSlab(world, want))) return false;
+
+		Item item = want.getBlock().asItem();
+		int slot = ensureInHotbar(mc, player, item);
+		if (slot < 0) return false;
+		ItemStack stack = player.getInventory().getItem(slot);
+		if (stack.getItem() != item) return false;
+
+		// Les voisins ou la position du joueur ont pu changer depuis le tick précédent.
+		Plan plan = p.plan();
+		float yaw0 = player.getYRot(), pitch0 = player.getXRot();
+		float yawO = player.yRotO, pitchO = player.xRotO;
+		int score;
+		try {
+			setRotation(player, plan.yaw(), plan.pitch());
+			score = score(player, (BlockItem) item, stack, plan.hit(), want);
+		} finally {
+			restoreRotation(player, yaw0, pitch0, yawO, pitchO);
+		}
+		if (score < plan.score()) return false;
+
+		return click(mc, player, slot, stack, plan);
+	}
+
+	private static boolean click(Minecraft mc, LocalPlayer player, int slot, ItemStack stack, Plan plan) {
 		player.getInventory().setSelectedSlot(slot);
 
 		float realYaw = player.getYRot();
@@ -198,6 +309,7 @@ public final class Printer {
 		float realPitchO = player.xRotO;
 		InteractionResult result;
 		if (plan.rotate()) {
+			// Renvoyée juste avant le clic : couvre un mouvement de souris envoyé entre-temps.
 			mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(plan.yaw(), plan.pitch(), player.onGround(), player.horizontalCollision));
 			setRotation(player, plan.yaw(), plan.pitch());
 		}
@@ -205,15 +317,11 @@ public final class Printer {
 			result = mc.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, plan.hit());
 		} finally {
 			if (plan.rotate()) {
-				player.setYRot(realYaw);
-				player.setXRot(realPitch);
-				player.yRotO = realYawO;
-				player.xRotO = realPitchO;
+				restoreRotation(player, realYaw, realPitch, realYawO, realPitchO);
 				mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(realYaw, realPitch, player.onGround(), player.horizontalCollision));
 			}
 		}
 
-		retryAt.put(pos.asLong(), tickCount + RETRY_PLACED);
 		if (result.consumesAction()) {
 			player.swing(InteractionHand.MAIN_HAND, stack.getInteractAnimation(), true);
 			return true;
@@ -251,16 +359,21 @@ public final class Printer {
 	// ------------------------------------------------------------- simulation
 
 	private static Plan findPlan(LocalPlayer player, ClientLevel level, BlockPos pos, BlockState want, ItemStack stack) {
+		int total = want.getProperties().size();
 		BlockState world = level.getBlockState(pos);
 		if (canCompleteSlab(world, want)) {
 			boolean bottom = world.getValue(BlockStateProperties.SLAB_TYPE) == SlabType.BOTTOM;
 			Direction face = bottom ? Direction.UP : Direction.DOWN;
 			Vec3 loc = new Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-			return new Plan(new BlockHitResult(loc, face, pos, false), false, 0, 0);
+			return new Plan(new BlockHitResult(loc, face, pos, false), false, 0, 0, total);
 		}
 
 		BlockItem blockItem = (BlockItem) stack.getItem();
-		int total = want.getProperties().size();
+		float[] yaws = yawsFor(want);
+		// Orientation 6 directions (piston, observateur, distributeur, tonneau...) : le serveur
+		// utilise la tête du joueur, en retard d'un tick. On ne se fie donc à la rotation réelle
+		// que si le résultat ne dépend pas de l'orientation horizontale.
+		boolean headDependent = want.hasProperty(BlockStateProperties.FACING);
 
 		float yaw0 = player.getYRot(), pitch0 = player.getXRot();
 		float yawO = player.yRotO, pitchO = player.xRotO;
@@ -272,15 +385,24 @@ public final class Printer {
 				for (double hy : hitHeights(face)) {
 					BlockHitResult hit = hitFor(pos, face, hy);
 					int score = score(player, blockItem, stack, hit, want);
+					if (score <= bestScore) continue;
+					if (headDependent) {
+						for (float yaw : yaws) {
+							setRotation(player, yaw, pitch0);
+							score = Math.min(score, score(player, blockItem, stack, hit, want));
+							if (score <= bestScore) break;
+						}
+						restoreRotation(player, yaw0, pitch0, yawO, pitchO);
+					}
 					if (score > bestScore) {
 						bestScore = score;
-						best = new Plan(hit, false, 0, 0);
+						best = new Plan(hit, false, 0, 0, score);
 						if (score == total) return best;
 					}
 				}
 			}
 			// 2) Avec une rotation (escaliers, fours, pistons, observateurs...).
-			for (float yaw : YAWS) {
+			for (float yaw : yaws) {
 				for (float pitch : PITCHES) {
 					setRotation(player, yaw, pitch);
 					for (Direction face : FACES) {
@@ -289,7 +411,7 @@ public final class Printer {
 							int score = score(player, blockItem, stack, hit, want);
 							if (score > bestScore) {
 								bestScore = score;
-								best = new Plan(hit, true, yaw, pitch);
+								best = new Plan(hit, true, yaw, pitch, score);
 								if (score == total) return best;
 							}
 						}
@@ -297,12 +419,16 @@ public final class Printer {
 				}
 			}
 		} finally {
-			player.setYRot(yaw0);
-			player.setXRot(pitch0);
-			player.yRotO = yawO;
-			player.xRotO = pitchO;
+			restoreRotation(player, yaw0, pitch0, yawO, pitchO);
 		}
 		return best;
+	}
+
+	/** Rotations horizontales à essayer ; les panneaux, bannières et têtes ont 16 orientations. */
+	private static float[] yawsFor(BlockState want) {
+		if (!want.hasProperty(BlockStateProperties.ROTATION_16)) return YAWS;
+		float exact = want.getValue(BlockStateProperties.ROTATION_16) * 22.5f;
+		return new float[] {Mth.wrapDegrees(exact), Mth.wrapDegrees(exact + 180f), YAWS[0], YAWS[1], YAWS[2], YAWS[3]};
 	}
 
 	private static double[] hitHeights(Direction face) {
@@ -362,5 +488,12 @@ public final class Printer {
 		player.setXRot(pitch);
 		player.yRotO = yaw;
 		player.xRotO = pitch;
+	}
+
+	private static void restoreRotation(LocalPlayer player, float yaw, float pitch, float yawO, float pitchO) {
+		player.setYRot(yaw);
+		player.setXRot(pitch);
+		player.yRotO = yawO;
+		player.xRotO = pitchO;
 	}
 }
